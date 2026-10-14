@@ -12,6 +12,8 @@ function bin(v) {
     return false;
   }
 }
+const PANDOC = process.env.PANDOC_BIN || 'pandoc';
+const TYPST = process.env.TYPST_BIN || 'typst';
 
 router.get('/', async (req, res) => {
   const db = await dbStatus();
@@ -19,8 +21,8 @@ router.get('/', async (req, res) => {
   return ok(res, {
     status: db.ok ? 'ok' : 'degraded',
     database: db,
-    pandoc: bin('pandoc --version'),
-    typst: bin('typst --version'),
+    pandoc: bin(`"${PANDOC}" --version`),
+    typst: bin(`"${TYPST}" --version`),
   });
 });
 

@@ -1,0 +1,34 @@
+const { z } = require('zod');
+
+const GeneratedQ = z.object({
+  qtype: z.enum(['PG', 'ISIAN', 'URAIAN']),
+  text: z.string().min(10),
+  options: z.array(z.string()).optional(),
+  answer_key: z.string().min(1),
+  weight: z.number().positive().default(1),
+  rubric: z.string().optional(),
+  difficulty: z.enum(['mudah', 'sedang', 'sukar']),
+}).superRefine((q, ctx) => {
+  if (q.qtype === 'PG') {
+    if (!q.options || q.options.length < 2) ctx.addIssue({ code: 'custom', message: 'PG wajib ≥2 opsi' });
+    else if (!/^[A-Z]$/.test(q.answer_key) || q.answer_key.charCodeAt(0) - 65 >= q.options.length) {
+      ctx.addIssue({ code: 'custom', message: 'answer_key PG harus huruf dalam rentang opsi' });
+    }
+  }
+});
+const GeneratedSet = z.object({ questions: z.array(GeneratedQ).min(1) });
+
+function buildGeneratePrompt({ materi, count, qtypes, difficulty }) {
+  return [
+    { role: 'system', content: 'Kamu pembuat soal kurikulum Merdeka untuk guru Indonesia. Jawab HANYA JSON valid sesuai schema, tanpa teks lain. Bahasa Indonesia. Jangan mengarang fakta di luar materi.' },
+    { role: 'user', content: `Buat ${count} soal (${qtypes.join(', ')}) tingkat ${difficulty} dari materi:\n---\n${materi.slice(0, 12000)}\n---\nFormat: {"questions":[{"qtype":"PG|ISIAN|URAIAN","text":"...","options":["A. ...","B. ..."],"answer_key":"B","weight":1,"rubric":"...","difficulty":"..."}]}. Untuk PG, answer_key = huruf opsi.` },
+  ];
+}
+
+function parseJson(text) {
+  const m = String(text).match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('LLM tidak mengembalikan JSON');
+  return JSON.parse(m[0]);
+}
+
+module.exports = { GeneratedSet, buildGeneratePrompt, parseJson };

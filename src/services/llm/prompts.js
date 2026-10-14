@@ -31,4 +31,14 @@ function parseJson(text) {
   return JSON.parse(m[0]);
 }
 
-module.exports = { GeneratedSet, buildGeneratePrompt, parseJson };
+const GradeOut = z.object({
+  pg: z.array(z.object({ nomor: z.coerce.number().int(), terbaca: z.string().default(''), benar: z.boolean() })).default([]),
+  uraian: z.array(z.object({ nomor: z.coerce.number().int(), saran: z.coerce.number().default(0), maks: z.coerce.number().default(0), alasan: z.string().default(''), readable: z.boolean().default(true) })).default([]),
+  feedback: z.string().default(''),
+});
+
+function buildGradePrompt(kunci) {
+  return `Lihat foto lembar jawaban. Kunci: ${kunci}. Untuk PG baca huruf jawaban tiap nomor, bandingkan dengan kunci. Uraian hanya saran skor 0-maks + alasan. Bila tulisan tak terbaca, readable:false dan jangan menebak. Jawab HANYA JSON: {"pg":[{"nomor":1,"terbaca":"B","benar":true}],"uraian":[{"nomor":11,"saran":7,"maks":10,"alasan":"...","readable":true}],"feedback":"..."}`;
+}
+
+module.exports = { GeneratedSet, buildGeneratePrompt, parseJson, GradeOut, buildGradePrompt };

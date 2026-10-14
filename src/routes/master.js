@@ -17,9 +17,13 @@ r.post('/letterheads', roles('superadmin', 'admin'), asyncH(c.createLetterhead))
 
 r.get('/classes', asyncH(c.listClasses));
 r.post('/classes', roles('superadmin', 'admin', 'guru'), asyncH(c.createClass));
+r.put('/classes/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.updateClass));
+r.delete('/classes/:id', roles('superadmin', 'admin'), asyncH(c.deleteClass));
 
 r.get('/students', asyncH(c.listStudents));
 r.post('/students', roles('superadmin', 'admin', 'guru'), asyncH(c.createStudent));
+r.put('/students/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.updateStudent));
+r.delete('/students/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.deleteStudent));
 r.post('/students/import', roles('superadmin', 'admin', 'guru'), asyncH(c.importStudents));
 
 r.get('/subjects', asyncH(c.listSubjects));

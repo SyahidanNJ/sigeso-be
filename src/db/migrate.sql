@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS exams(id SERIAL PRIMARY KEY, institution_id INT NOT N
 CREATE TABLE IF NOT EXISTS exam_questions(exam_id INT REFERENCES exams(id) ON DELETE CASCADE, question_id INT REFERENCES questions(id),
   nomor INT NOT NULL, weight_override NUMERIC, PRIMARY KEY(exam_id, question_id));
 CREATE TABLE IF NOT EXISTS exam_sheets(id SERIAL PRIMARY KEY, exam_id INT NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
-  student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE, qr_base TEXT UNIQUE NOT NULL, pdf_path TEXT, print_count INT DEFAULT 0, UNIQUE(exam_id, student_id));
+  student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE, qr_base TEXT UNIQUE NOT NULL, pdf_path TEXT, UNIQUE(exam_id, student_id));
 CREATE TABLE IF NOT EXISTS exam_sheet_pages(id SERIAL PRIMARY KEY, sheet_id INT NOT NULL REFERENCES exam_sheets(id) ON DELETE CASCADE,
   page_no INT NOT NULL, qr_code TEXT UNIQUE NOT NULL, UNIQUE(sheet_id, page_no));
 CREATE TABLE IF NOT EXISTS submissions(id SERIAL PRIMARY KEY, sheet_id INT UNIQUE NOT NULL REFERENCES exam_sheets(id) ON DELETE CASCADE,
@@ -52,5 +52,6 @@ CREATE INDEX IF NOT EXISTS idx_sub_img ON submission_images(submission_id);
 CREATE INDEX IF NOT EXISTS idx_llm_req ON llm_usage_logs(request_id);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_q_bank ON questions(institution_id, subject_id, topic_id);
--- Hapus kolom mati (Tingkat kelas tak dipakai)
+-- Hapus kolom mati (Tingkat kelas tak dipakai, hitungan cetak tak dipakai)
 ALTER TABLE classes DROP COLUMN IF EXISTS level;
+ALTER TABLE exam_sheets DROP COLUMN IF EXISTS print_count;

@@ -71,6 +71,20 @@ async function createClass(req, res) {
   const q = await pool.query('INSERT INTO classes(institution_id,name,academic_year) VALUES($1,$2,$3) RETURNING *', [inst, p.name, p.academic_year]);
   ok(res, q.rows[0], 'Kelas dibuat.');
 }
+async function updateClass(req, res) {
+  const p = z.object({ name: z.string().min(1), academic_year: z.string().min(4) }).parse(req.body);
+  const q = await pool.query('UPDATE classes SET name=$1, academic_year=$2 WHERE id=$3 RETURNING *', [p.name, p.academic_year, req.params.id]);
+  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
+  ok(res, q.rows[0], 'Kelas diubah.');
+}
+async function deleteClass(req, res) {
+  const isi = await pool.query('SELECT COUNT(*) AS n FROM students WHERE class_id=$1 AND is_active=true', [req.params.id]);
+  if (Number(isi.rows[0].n) > 0) return fail(res, 400, 'VALIDATION_ERROR', 'Kelas masih berisi siswa, kosongkan dulu.');
+  const q = await pool.query('DELETE FROM classes WHERE id=$1 RETURNING id', [req.params.id]);
+  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
+  await audit(req, 'delete', 'classes', req.params.id);
+  ok(res, null, 'Kelas dihapus.');
+}
 
 // ---- SISWA (+ impor JSON dari CSV yang diparsing di FE) ----
 async function listStudents(req, res) {
@@ -81,6 +95,18 @@ async function createStudent(req, res) {
   const p = z.object({ class_id: z.number().int(), name: z.string().min(1), nis: z.string().min(1) }).parse(req.body);
   const q = await pool.query('INSERT INTO students(class_id,name,nis) VALUES($1,$2,$3) RETURNING *', [p.class_id, p.name, p.nis]);
   ok(res, q.rows[0], 'Siswa ditambahkan.');
+}
+async function updateStudent(req, res) {
+  const p = z.object({ name: z.string().min(1), nis: z.string().min(1) }).parse(req.body);
+  const q = await pool.query('UPDATE students SET name=$1, nis=$2 WHERE id=$3 AND is_active=true RETURNING *', [p.name, p.nis, req.params.id]);
+  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Siswa tak ada.');
+  ok(res, q.rows[0], 'Siswa diubah.');
+}
+async function deleteStudent(req, res) {
+  const q = await pool.query('UPDATE students SET is_active=false WHERE id=$1 AND is_active=true RETURNING id', [req.params.id]);
+  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Siswa tak ada.');
+  await audit(req, 'delete', 'students', req.params.id);
+  ok(res, null, 'Siswa dihapus. Nilai yang sudah ada tetap tersimpan.');
 }
 async function importStudents(req, res) {
   const p = z.object({ class_id: z.number().int(), rows: z.array(z.object({ name: z.string().min(1), nis: z.string().min(1) })).max(200) }).parse(req.body);
@@ -132,8 +158,8 @@ async function createSubchapter(req, res) {
 
 module.exports = {
   listInstitutions, createInstitution, listUsers, createUser,
-  listLetterheads, createLetterhead, listClasses, createClass,
-  listStudents, createStudent, importStudents,
+  listLetterheads, createLetterhead, listClasses, createClass, updateClass, deleteClass,
+  listStudents, createStudent, updateStudent, deleteStudent, importStudents,
   listSubjects, createSubject, listTopics, createTopic,
   listChapters, createChapter, listSubchapters, createSubchapter,
 };

@@ -40,7 +40,6 @@ async function reprintSheet(req, res) {
   fs.writeFileSync(path.join(jobDir, 'satu.typ'), typ);
   const pdf = path.join(jobDir, `lembar-${sh.id}.pdf`);
   await new Promise((resolve, reject) => execFile(process.env.TYPST_BIN || 'typst', ['compile', path.join(jobDir, 'satu.typ'), pdf], { timeout: 60000 }, (e) => (e ? reject(e) : resolve())));
-  await pool.query('UPDATE exam_sheets SET print_count=print_count+1 WHERE id=$1', [sh.id]);
   const rel = path.basename(jobDir) + `/lembar-${sh.id}.pdf`;
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Lembar ulang dicetak.');
 }

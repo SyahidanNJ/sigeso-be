@@ -101,7 +101,7 @@ async function printExam(examId) {
     const sheet = await sheetFor(examId, st.id);
     parts.push(await renderSiswa(jobDir, exam, kop, st, items.map((q) => ({ ...q, options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options })), sheet));
     parts.push('#pagebreak()\n');
-    await pool.query('UPDATE exam_sheets SET pdf_path=$1, print_count=print_count+1 WHERE id=$2', [jobDir, sheet.id]);
+    await pool.query('UPDATE exam_sheets SET pdf_path=$1 WHERE id=$2', [jobDir, sheet.id]);
   }
   const typ = path.join(jobDir, 'semua.typ');
   fs.writeFileSync(typ, parts.join('\n'));

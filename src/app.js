@@ -20,6 +20,8 @@ app.use('/api/v1', require('./routes/sources'));
 app.use('/api/v1', require('./routes/bank'));
 app.use('/api/v1', require('./routes/print'));
 app.use('/api/v1', require('./routes/grade'));
+app.use('/api/v1', require('./routes/export'));
+app.use('/api/v1', require('./routes/download'));
 
 app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Rute tidak ada.' }, requestId: res.locals.requestId }));
 app.use(errorHandler);

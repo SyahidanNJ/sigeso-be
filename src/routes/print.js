@@ -52,12 +52,4 @@ r.post('/sheets/:id/reprint', roles(...GURU), asyncH(async (req, res) => {
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Lembar ulang dicetak.');
 }));
 
-r.get('/downloads/*', asyncH(async (req, res) => {
-  const rel = req.params[0] || '';
-  if (rel.includes('..') || path.isAbsolute(rel)) return fail(res, 400, 'VALIDATION_ERROR', 'Path tak valid.');
-  const f = path.join(DIR, rel);
-  if (!f.startsWith(DIR) || !fs.existsSync(f)) return fail(res, 404, 'NOT_FOUND', 'File tak ada.');
-  res.download(f);
-}));
-
 module.exports = r;

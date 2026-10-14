@@ -15,6 +15,7 @@ app.use(pinoHttp({ logger, customProps: (req, res) => ({ requestId: res.locals.r
 app.use('/api/v1/health', require('./routes/health'));
 app.use('/api/v1/auth', require('./routes/auth'));
 app.use('/api/v1/llm', require('./routes/llm'));
+app.use('/api/v1', require('./routes/master'));
 
 app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Rute tidak ada.' }, requestId: res.locals.requestId }));
 app.use(errorHandler);

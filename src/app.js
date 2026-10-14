@@ -18,6 +18,7 @@ app.use('/api/v1/llm', require('./routes/llm'));
 app.use('/api/v1', require('./routes/master'));
 app.use('/api/v1', require('./routes/sources'));
 app.use('/api/v1', require('./routes/bank'));
+app.use('/api/v1', require('./routes/print'));
 
 app.use((req, res) => res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Rute tidak ada.' }, requestId: res.locals.requestId }));
 app.use(errorHandler);

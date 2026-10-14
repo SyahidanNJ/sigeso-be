@@ -10,7 +10,11 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(requestId);
-app.use(pinoHttp({ logger, customProps: (req, res) => ({ requestId: res.locals.requestId }) }));
+if (process.env.REQUEST_LOG === 'json') {
+  app.use(pinoHttp({ logger, customProps: (req, res) => ({ requestId: res.locals.requestId }) }));
+} else {
+  app.use(require('./middleware/ringkas'));
+}
 
 app.use('/api/v1/health', require('./routes/health'));
 app.use('/api/v1/auth', require('./routes/auth'));

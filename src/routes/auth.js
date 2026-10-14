@@ -12,6 +12,46 @@ function sign(u) {
   return jwt.sign({ id: u.id, role: u.role, institution_id: u.institution_id }, process.env.JWT_SECRET || 'dev', { expiresIn: '12h' });
 }
 
+// Daftar publik (hanya nama institusi yang dibuka, tanpa data sensitif).
+router.get('/institutions', async (req, res, next) => {
+  try {
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    ok(res, (await pool.query('SELECT id, name FROM institutions ORDER BY name')).rows);
+  } catch (e) { next(e); }
+});
+
+// shortcut: throttle in-memory (reset saat restart). Ganti store eksternal bila multi-instance.
+const ember = new Map();
+function throttle(req, res, next) {
+  const k = req.ip;
+  const now = Date.now();
+  const riw = (ember.get(k) || []).filter((t) => now - t < 15 * 60 * 1000);
+  if (riw.length >= 10) return fail(res, 429, 'QUOTA_EXCEEDED', 'Terlalu banyak percobaan, tunggu 15 menit.');
+  riw.push(now);
+  ember.set(k, riw);
+  next();
+}
+
+router.post('/register', throttle, async (req, res, next) => {
+  try {
+    const p = z.object({ name: z.string().min(1), email: z.string().email(), password: z.string().min(6), institution_id: z.number().int() }).parse(req.body);
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    const inst = await pool.query('SELECT id FROM institutions WHERE id=$1', [p.institution_id]);
+    if (!inst.rowCount) return fail(res, 400, 'VALIDATION_ERROR', 'Institusi tak dikenal.');
+    const ada = await pool.query('SELECT id FROM users WHERE email=$1', [p.email]);
+    if (ada.rowCount) return fail(res, 400, 'VALIDATION_ERROR', 'Email sudah terdaftar, silakan login.');
+    const q = await pool.query(
+      'INSERT INTO users(institution_id,name,email,password_hash,role) VALUES($1,$2,$3,$4,$5) RETURNING id,name,email,role,institution_id',
+      [p.institution_id, p.name, p.email, await bcrypt.hash(p.password, 10), 'guru']
+    );
+    await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id) VALUES($1,$2,$3,$4,$5,$6)',
+      [res.locals.requestId, q.rows[0].id, p.institution_id, 'register', 'users', q.rows[0].id]);
+    ok(res, { token: sign(q.rows[0]), user: { id: q.rows[0].id, name: q.rows[0].name, role: 'guru' } }, 'Pendaftaran berhasil, selamat datang.');
+  } catch (e) {
+    next(e.code ? e : Object.assign(e, { code: 'VALIDATION_ERROR', httpStatus: 400 }));
+  }
+});
+
 router.post('/login', async (req, res, next) => {
   try {
     const p = loginSchema.parse(req.body);

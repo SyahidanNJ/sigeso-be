@@ -61,4 +61,55 @@ async function exportNilai(req, res) {
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Ekspor siap diunduh.');
 }
 
-module.exports = { exportNilai };
+async function dataSoal(examId) {
+  const exam = (await pool.query('SELECT e.*, c.name AS kelas FROM exams e JOIN classes c ON c.id=e.class_id WHERE e.id=$1', [examId])).rows[0];
+  if (!exam) throw new AppError('NOT_FOUND', 'Ujian tak ada.');
+  const items = (await pool.query('SELECT q.*, eq.nomor FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [examId])).rows;
+  if (!items.length) throw new AppError('VALIDATION_ERROR', 'Ujian belum punya soal.');
+  const kop = (await pool.query('SELECT * FROM letterhead_templates WHERE institution_id=$1 ORDER BY is_default DESC, id LIMIT 1', [exam.institution_id])).rows[0];
+  return { exam, items: items.map((q) => ({ ...q, options: typeof q.options === 'string' ? JSON.parse(q.options || '[]') : (q.options || []) })), kop };
+}
+
+function mdSoal(exam, items, kop) {
+  const kopMd = (kop?.header_markdown || 'SEKOLAH').split('\n').map((l) => `# ${l}`).join('\n');
+  const soal = items.map((q, i) => {
+    const opts = q.qtype === 'PG' ? '\n' + q.options.map((o) => `   - ${o}`).join('\n') : '';
+    return `${i + 1}. ${q.text}${opts}`;
+  }).join('\n\n');
+  const kunci = items.map((q, i) => `${i + 1}. ${q.answer_key}`).join('\n');
+  return `${kopMd}\n\n# ${exam.title}\n\n## Soal\n\n${soal}\n\n## Kunci Jawaban\n\n${kunci}\n`;
+}
+
+async function exportDokumen(req, res) {
+  const format = req.query.format || 'pdf';
+  const { exam, items, kop } = await dataSoal(req.params.id);
+  const stamp = Date.now();
+  const jobDir = path.join(DIR, `dokumen-${exam.id}-${stamp}`);
+  fs.mkdirSync(jobDir, { recursive: true });
+  let rel;
+  if (format === 'docx') {
+    fs.writeFileSync(path.join(jobDir, 'soal.md'), mdSoal(exam, items, kop));
+    await new Promise((resolve, reject) => execFile(process.env.PANDOC_BIN || 'pandoc', [path.join(jobDir, 'soal.md'), '-o', path.join(jobDir, 'soal.docx')], { timeout: 60000 }, (e) => (e ? reject(new AppError('PANDOC_FAILED', 'Pandoc gagal konversi.')) : resolve())));
+    rel = `export/dokumen-${exam.id}-${stamp}/soal.docx`;
+  } else if (format === 'pdf') {
+    const kopLines = (kop?.header_markdown || 'SEKOLAH').split('\n').map((l) => `#align(center)[#strong[${esc(l)}]]`).join('\n');
+    const soal = items.map((q, i) => {
+      const body = q.qtype === 'PG'
+        ? q.options.map((o) => `#box(stroke: black, inset: 3pt)[#text(size: 9pt)[${esc(o)}]]`).join(' ')
+        : q.qtype === 'ISIAN' ? '#line(length: 8cm)' : '#rect(width: 100%, height: 3cm, stroke: black)[]';
+      return `${i + 1}. ${esc(q.text)}\n${body}\n`;
+    }).join('\n');
+    const kunci = items.map((q, i) => `[${i + 1}], [${esc(q.answer_key)}]`).join(', ');
+    const typ = `#set page(paper: "a4", margin: 2cm)\n#set text(lang: "id", size: 11pt)\n${kopLines}\n#line(length: 100%)\n#align(center)[#strong[${esc(exam.title)}]]\n${soal}\n#pagebreak()\n#align(center)[#strong[Kunci Jawaban]]\n#table(columns: 2, [*No*], [*Kunci*], ${kunci})\n`;
+    fs.writeFileSync(path.join(jobDir, 'soal.typ'), typ);
+    await new Promise((resolve, reject) => execFile(process.env.TYPST_BIN || 'typst', ['compile', path.join(jobDir, 'soal.typ'), path.join(jobDir, 'soal.pdf')], { timeout: 60000 }, (e) => (e ? reject(new AppError('PANDOC_FAILED', 'Gagal render PDF soal.')) : resolve())));
+    rel = `export/dokumen-${exam.id}-${stamp}/soal.pdf`;
+  } else {
+    return fail(res, 400, 'VALIDATION_ERROR', 'format: pdf, docx.');
+  }
+  await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [res.locals.requestId, req.user.id, req.user.institution_id, 'export-doc', 'exams', req.params.id, { format }]);
+  ok(res, { download: `/api/v1/downloads/${rel}` }, 'Dokumen soal siap diunduh.');
+}
+
+module.exports = { exportNilai, exportDokumen };

@@ -3,7 +3,7 @@ const path = require('path');
 const { fail } = require('../lib/respond');
 
 // Unduhan terpadu untuk uploads/print dan uploads/export (auth wajib, anti traversal).
-function download(req, res) {
+async function download(req, res) {
   const rel = req.params[0] || '';
   if (rel.includes('..') || path.isAbsolute(rel)) return fail(res, 400, 'VALIDATION_ERROR', 'Path tak valid.');
   const base = path.join(__dirname, '..', '..', 'uploads');

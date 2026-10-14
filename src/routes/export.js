@@ -7,5 +7,6 @@ const r = express.Router();
 r.use(auth);
 
 r.get('/exams/:id/export', roles('superadmin', 'admin', 'guru'), asyncH(c.exportNilai));
+r.get('/exams/:id/dokumen', roles('superadmin', 'admin', 'guru'), asyncH(c.exportDokumen));
 
 module.exports = r;

@@ -1,11 +1,35 @@
 const logger = require('../lib/logger');
 const { fail } = require('../lib/respond');
 
+const LABEL = {
+  name: 'Nama', academic_year: 'Tahun ajaran', nis: 'NIS',
+  title: 'Judul', text: 'Soal', answer_key: 'Kunci jawaban', options: 'Pilihan',
+  weight: 'Bobot', rubric: 'Rubrik', difficulty: 'Tingkat kesulitan',
+  email: 'Email', password: 'Kata sandi', url: 'URL', qr_code: 'Kode QR',
+  final_score: 'Nilai', feedback: 'Masukan', question_ids: 'Soal',
+  class_id: 'Kelas', subject_id: 'Mapel', topic_id: 'Topik',
+  chapter_id: 'Bab', sub_chapter_id: 'Subbab', grade_level: 'Tingkat kelas',
+  paper_size: 'Ukuran kertas', mode: 'Mode', institution_id: 'Institusi',
+  header_markdown: 'Kop surat', count: 'Jumlah', qtypes: 'Tipe soal',
+  rows: 'Baris', file: 'Berkas', foto: 'Foto',
+};
+
+function ramah(issue) {
+  const field = (issue.path || [])[0];
+  const label = LABEL[field] || (field ? String(field) : 'Isian');
+  if (issue.code === 'too_small') return `${label} wajib diisi.`;
+  if (issue.code === 'too_big') return `${label} kebanyakan/kepanjangan.`;
+  if (issue.validation === 'email') return 'Email tak valid, contoh: nama@sekolah.id.';
+  if (issue.code === 'invalid_type') return `${label} belum benar.`;
+  if (issue.code === 'invalid_enum_value') return `${label} pilihannya tidak dikenal.`;
+  return `${label} belum benar.`;
+}
+
 function pesanZod(err) {
   try {
-    return 'Input tak valid: ' + err.issues.map((i) => `${(i.path || []).join('.') || 'form'} (${i.message})`).join('; ');
+    return err.issues.slice(0, 3).map(ramah).join(' ');
   } catch {
-    return 'Input tak valid.';
+    return 'Isian belum benar, periksa lagi.';
   }
 }
 

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY, institution_id INT REFER
   name TEXT NOT NULL, email CITEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('superadmin','admin','guru')), monthly_token_quota INT DEFAULT 500000, is_active BOOLEAN DEFAULT true);
 CREATE TABLE IF NOT EXISTS classes(id SERIAL PRIMARY KEY, institution_id INT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, academic_year TEXT NOT NULL, level INT NOT NULL);
+  name TEXT NOT NULL, academic_year TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS students(id SERIAL PRIMARY KEY, class_id INT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
   name TEXT NOT NULL, nis VARCHAR(30) NOT NULL, is_active BOOLEAN DEFAULT true, UNIQUE(class_id, nis));
 CREATE TABLE IF NOT EXISTS subjects(id SERIAL PRIMARY KEY, institution_id INT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE, name TEXT NOT NULL);
@@ -52,3 +52,5 @@ CREATE INDEX IF NOT EXISTS idx_sub_img ON submission_images(submission_id);
 CREATE INDEX IF NOT EXISTS idx_llm_req ON llm_usage_logs(request_id);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_q_bank ON questions(institution_id, subject_id, topic_id);
+-- Hapus kolom mati (Tingkat kelas tak dipakai)
+ALTER TABLE classes DROP COLUMN IF EXISTS level;

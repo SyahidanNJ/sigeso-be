@@ -7,7 +7,7 @@ function tenantId(req, bodyInst) {
 function needTenant(req, res, bodyInst) {
   const id = tenantId(req, bodyInst);
   if (!id) {
-    res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'institution_id wajib.' }, requestId: res.locals.requestId });
+    res.status(400).json({ status: false, error: true, code: 'VALIDATION_ERROR', message: 'institution_id wajib.', details: null, data: null, requestId: res.locals.requestId });
     return null;
   }
   return Number(id);

@@ -6,10 +6,10 @@ const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
 const { AppError } = require('../lib/errors');
 const { catatBerkas } = require('../lib/berkas');
+const { esc, kopTypst, judulTypst, soalTypst, copyLogos } = require('../services/print/layout');
 
 const DIR = path.join(__dirname, '..', '..', 'uploads', 'export');
 fs.mkdirSync(DIR, { recursive: true });
-const esc = (s) => String(s || '').replace(/\\/g, '\\\\').replace(/[#*_`$@<>\[\]]/g, (c) => '\\' + c);
 
 async function dataNilai(examId) {
   const exam = (await pool.query('SELECT e.*, c.name AS kelas FROM exams e JOIN classes c ON c.id=e.class_id WHERE e.id=$1', [examId])).rows[0];
@@ -64,17 +64,19 @@ async function exportNilai(req, res) {
 }
 
 async function dataSoal(examId) {
-  const exam = (await pool.query('SELECT e.*, c.name AS kelas FROM exams e JOIN classes c ON c.id=e.class_id WHERE e.id=$1', [examId])).rows[0];
+  const exam = (await pool.query('SELECT e.*, c.name AS kelas, c.academic_year, s.name AS mapel FROM exams e JOIN classes c ON c.id=e.class_id LEFT JOIN subjects s ON s.id=e.subject_id WHERE e.id=$1', [examId])).rows[0];
   if (!exam) throw new AppError('NOT_FOUND', 'Ujian tak ada.');
   const items = (await pool.query('SELECT q.*, eq.nomor FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [examId])).rows;
   if (!items.length) throw new AppError('VALIDATION_ERROR', 'Ujian belum punya soal.');
   const kop = (await pool.query('SELECT * FROM letterhead_templates WHERE institution_id=$1 ORDER BY is_default DESC, id LIMIT 1', [exam.institution_id])).rows[0];
-  return { exam, items: items.map((q) => ({ ...q, options: typeof q.options === 'string' ? JSON.parse(q.options || '[]') : (q.options || []) })), kop };
+  const inst = (await pool.query('SELECT * FROM institutions WHERE id=$1', [exam.institution_id])).rows[0];
+  return { exam, items: items.map((q) => ({ ...q, options: typeof q.options === 'string' ? JSON.parse(q.options || '[]') : (q.options || []) })), kop, inst };
 }
 
 function mdSoal(exam, items, kop, isi) {
   const kopMd = (kop?.header_markdown || 'SEKOLAH').split('\n').map((l) => `# ${l}`).join('\n');
-  let md = `${kopMd}\n\n# ${exam.title} (${isi === 'kunci' ? 'Kunci Jawaban' : 'Soal'})\n`;
+  const jenis = String(exam.exam_type || exam.title || '').toUpperCase();
+  let md = `${kopMd}\n\n# ${jenis}${exam.academic_year ? `\n\nTahun Pelajaran ${exam.academic_year}` : ''}\n\nMata Pelajaran: ${exam.mapel || '-'} · Kelas: ${exam.kelas || '-'}\n`;
   if (isi !== 'kunci') {
     const soal = items.map((q, i) => {
       const opts = q.qtype === 'PG' ? '\n' + q.options.map((o) => `   - ${o}`).join('\n') : '';
@@ -93,7 +95,7 @@ async function exportDokumen(req, res) {
   const format = req.query.format || 'pdf';
   const isi = ['soal', 'kunci'].includes(req.query.isi) ? req.query.isi : 'semua';
   const nama = isi === 'semua' ? 'dokumen' : isi;
-  const { exam, items, kop } = await dataSoal(req.params.id);
+  const { exam, items, kop, inst } = await dataSoal(req.params.id);
   const stamp = Date.now();
   const jobDir = path.join(DIR, `dokumen-${exam.id}-${stamp}`);
   fs.mkdirSync(jobDir, { recursive: true });
@@ -103,20 +105,11 @@ async function exportDokumen(req, res) {
     await new Promise((resolve, reject) => execFile(process.env.PANDOC_BIN || 'pandoc', [path.join(jobDir, `${nama}.md`), '-o', path.join(jobDir, `${nama}.docx`)], { timeout: 60000 }, (e) => (e ? reject(new AppError('PANDOC_FAILED', 'Pandoc gagal konversi.')) : resolve())));
     rel = `export/dokumen-${exam.id}-${stamp}/${nama}.docx`;
   } else if (format === 'pdf') {
-    const kopLines = (kop?.header_markdown || 'SEKOLAH').split('\n').map((l) => `#align(center)[#strong[${esc(l)}]]`).join('\n');
-    let typ = `#set page(paper: "a4", margin: 2cm)\n#set text(lang: "id", size: 11pt)\n${kopLines}\n#line(length: 100%)\n#align(center)[#strong[${esc(exam.title)}]]\n`;
-    if (isi !== 'kunci') {
-      const soal = items.map((q, i) => {
-        const body = q.qtype === 'PG'
-          ? q.options.map((o) => `#box(stroke: black, inset: 3pt)[#text(size: 9pt)[${esc(o)}]]`).join(' ')
-          : q.qtype === 'ISIAN' ? '#line(length: 8cm)' : '#rect(width: 100%, height: 3cm, stroke: black)[]';
-        return `${i + 1}. ${esc(q.text)}\n${body}\n`;
-      }).join('\n');
-      typ += `${soal}\n`;
-    }
+    const logos = copyLogos(jobDir, inst);
+    let typ = `#set page(paper: "a4", margin: 1.6cm)\n#set text(lang: "id", size: 10.5pt)\n${kopTypst({ kop, inst, logos })}\n${judulTypst(exam)}\n`;
+    if (isi !== 'kunci') typ += soalTypst(items);
     if (isi !== 'soal') {
-      const kunci = items.map((q, i) => `[${i + 1}], [${esc(q.answer_key)}]`).join(', ');
-      typ += `#pagebreak()\n#align(center)[#strong[Kunci Jawaban]]\n#table(columns: 2, [*No*], [*Kunci*], ${kunci})\n`;
+      typ += `${isi === 'semua' ? '#pagebreak()\n' : ''}#align(center)[#text(size: 13pt, weight: "bold")[KUNCI JAWABAN]]\n#v(4pt)\n#table(columns: (1.4cm, 1fr), [*No*], [*Kunci*], ${items.map((q) => `[${q.nomor}], [${esc(q.answer_key)}]`).join(', ')})\n`;
     }
     fs.writeFileSync(path.join(jobDir, `${nama}.typ`), typ);
     await new Promise((resolve, reject) => execFile(process.env.TYPST_BIN || 'typst', ['compile', path.join(jobDir, `${nama}.typ`), path.join(jobDir, `${nama}.pdf`)], { timeout: 60000 }, (e) => (e ? reject(new AppError('PANDOC_FAILED', 'Gagal render PDF soal.')) : resolve())));

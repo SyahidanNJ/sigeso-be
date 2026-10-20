@@ -156,22 +156,26 @@ async function listExams(req, res) {
   ok(res, q.rows);
 }
 async function createExam(req, res) {
-  const p = z.object({ title: z.string().min(1), class_id: z.number().int(), subject_id: z.number().int().optional(), mode: z.enum(['SATU_LEMBAR', 'TERPISAH', 'HEMAT']).optional(), paper_size: z.enum(['A4', 'F4']).optional() }).parse(req.body);
+  const p = z.object({ title: z.string().min(1), exam_type: z.string().trim().min(1).max(60).optional(), class_id: z.number().int(), subject_id: z.number().int().optional(), mode: z.enum(['SATU_LEMBAR', 'TERPISAH', 'HEMAT']).optional(), paper_size: z.enum(['A4', 'F4']).optional() }).parse(req.body);
   const inst = needTenant(req, res, req.body.institution_id);
   if (!inst) return;
-  const q = await pool.query('INSERT INTO exams(institution_id,subject_id,class_id,title,mode,paper_size,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-    [inst, p.subject_id || null, p.class_id, p.title, p.mode || 'SATU_LEMBAR', p.paper_size || 'A4', req.user.id]);
+  const q = await pool.query('INSERT INTO exams(institution_id,subject_id,class_id,title,exam_type,mode,paper_size,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+    [inst, p.subject_id || null, p.class_id, p.title, p.exam_type || 'Ulangan Harian', p.mode || 'SATU_LEMBAR', p.paper_size || 'A4', req.user.id]);
   ok(res, q.rows[0], 'Ujian dibuat. Pilih soal dari bank.');
 }
 
 async function updateExam(req, res) {
-  const p = z.object({ title: z.string().trim().min(1).max(200) }).parse(req.body);
+  const p = z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    exam_type: z.string().trim().min(1).max(60).optional(),
+  }).refine((x) => x.title || x.exam_type).parse(req.body);
   const inst = needTenant(req, res);
   if (!inst) return;
-  const r = await pool.query('UPDATE exams SET title=$1 WHERE id=$2 AND institution_id=$3 RETURNING *', [p.title, req.params.id, inst]);
+  const r = await pool.query('UPDATE exams SET title=COALESCE($1,title), exam_type=COALESCE($2,exam_type) WHERE id=$3 AND institution_id=$4 RETURNING *',
+    [p.title || null, p.exam_type || null, req.params.id, inst]);
   if (!r.rowCount) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
   await audit(req, 'update', 'exams', r.rows[0].id);
-  ok(res, r.rows[0], 'Judul ujian diperbarui.');
+  ok(res, r.rows[0], 'Ujian diperbarui.');
 }
 
 // Menghapus ujian ikut menghapus lembar, foto, dan nilainya (cascade).

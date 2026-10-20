@@ -37,7 +37,7 @@ const GradeOut = z.object({
 });
 
 function buildGradePrompt(kunci) {
-  return `Lihat foto lembar jawaban. Kunci: ${kunci}. Untuk PG baca huruf jawaban tiap nomor, bandingkan dengan kunci. Uraian hanya saran skor 0-maks + alasan. Bila tulisan tak terbaca, readable:false dan jangan menebak. Jawab HANYA JSON: {"pg":[{"nomor":1,"terbaca":"B","benar":true}],"uraian":[{"nomor":11,"saran":7,"maks":10,"alasan":"...","readable":true}],"feedback":"..."}`;
+  return `Lihat foto lembar jawaban. Kunci: ${kunci}. Huruf opsi tercetak kecil (a-d), jadi bandingkan tanpa peduli huruf besar/kecil. Untuk PG baca huruf jawaban tiap nomor, bandingkan dengan kunci. Uraian hanya saran skor 0-maks + alasan. Bila tulisan tak terbaca, readable:false dan jangan menebak. Jawab HANYA JSON: {"pg":[{"nomor":1,"terbaca":"B","benar":true}],"uraian":[{"nomor":11,"saran":7,"maks":10,"alasan":"...","readable":true}],"feedback":"..."}`;
 }
 
 module.exports = { GeneratedSet, buildGeneratePrompt, parseJson, GradeOut, buildGradePrompt };

@@ -5,51 +5,22 @@ const QR = require('qrcode');
 const { randomBytes } = require('crypto');
 const { pool } = require('../../db/pool');
 const { AppError } = require('../../lib/errors');
+const {
+  kopTypst, judulTypst, metaTypst, identitasTypst, soalTypst, lembarJawabanTypst, copyLogos,
+} = require('./layout');
 
 const DIR = path.join(__dirname, '..', '..', '..', 'uploads', 'print');
 fs.mkdirSync(DIR, { recursive: true });
 const TYPST = process.env.TYPST_BIN || 'typst';
 
-// shortcut: template 2 halaman tetap (soal | jawaban). Upgrade: paginasi dinamis bila soal >15.
-function esc(s) {
-  return String(s || '').replace(/\\/g, '\\\\').replace(/[#*_`$@<>\[\]]/g, (c) => '\\' + c);
-}
-
-function kopBlock(kop) {
-  const lines = (kop?.header_markdown || 'SEKOLAH').split('\n').map((l) => `#align(center)[#strong[${esc(l)}]]`).join('\n');
-  return `${lines}\n#line(length: 100%)\n`;
-}
-
-function soalBlock(items) {
-  return items.map((q, i) => {
-    const no = i + 1;
-    let body = '';
-    if (q.qtype === 'PG') {
-      const opts = (q.options || []).map((o) => `#box(stroke: black, inset: 3pt)[#text(size: 9pt)[${esc(o)}]]`).join(' ');
-      body = `${opts}\nJawaban: #box(stroke: black, width: 1.2cm, inset: 3pt)[ ]`;
-    } else if (q.qtype === 'ISIAN') {
-      body = `Jawaban: #box(stroke: black, width: 8cm, inset: 5pt)[ ]`;
-    } else {
-      body = `#rect(width: 100%, height: 3cm, stroke: black)[]`;
-    }
-    return `${no}. ${esc(q.text)}\n${body}\n`;
-  }).join('\n');
-}
-
-function lembarSiswa({ kop, exam, student, items, qrBase, qr1, qr2 }) {
-  return `${kopBlock(kop)}
-#align(center)[#strong[${esc(exam.title)}]]
-Nama: #strong[${esc(student.name)}] \u00a0 NIS: ${esc(student.nis)} #h(1fr) #image("${qr1}", width: 2cm)
-${soalBlock(items)}
-#pagebreak()
-#align(center)[#strong[LEMBAR JAWABAN]]
-Nama: #strong[${esc(student.name)}] #h(1fr) #image("${qr2}", width: 2cm)
-#table(columns: 3, [*No*], [*Jawaban*], [*Nilai*], ${items.map((q, i) => `[${i + 1}], [#box(stroke: black, width: 4cm, inset: 4pt)[ ]], []`).join(', ')})
-`;
-}
-
 function paperSize(size) {
-  return size === 'F4' ? '#set page(width: 21.5cm, height: 33cm, margin: 1.8cm)' : '#set page(paper: "a4", margin: 2cm)';
+  return size === 'F4'
+    ? '#set page(width: 21.5cm, height: 33cm, margin: 1.8cm)'
+    : '#set page(paper: "a4", margin: 1.6cm)';
+}
+
+function rapikan(items) {
+  return items.map((q) => ({ ...q, options: typeof q.options === 'string' ? JSON.parse(q.options || '[]') : (q.options || []) }));
 }
 
 async function compile(typ, pdf) {
@@ -66,6 +37,35 @@ async function getKop(institutionId, paperSize) {
   return q.rows[0] || { header_markdown: 'SEKOLAH' };
 }
 
+// Data yang dibutuhkan kop dan blok identitas: kelas, tahun pelajaran, mapel.
+async function konteksUjian(examId) {
+  const exam = (await pool.query(`
+    SELECT e.*, c.name AS kelas, c.academic_year, s.name AS mapel
+    FROM exams e
+    JOIN classes c ON c.id=e.class_id
+    LEFT JOIN subjects s ON s.id=e.subject_id
+    WHERE e.id=$1`, [examId])).rows[0];
+  if (!exam) throw new AppError('NOT_FOUND', 'Ujian tak ada.');
+  const inst = (await pool.query('SELECT * FROM institutions WHERE id=$1', [exam.institution_id])).rows[0];
+  const kop = await getKop(exam.institution_id, exam.paper_size);
+  return { exam, inst, kop };
+}
+
+async function ambilSoal(examId) {
+  return rapikan((await pool.query(
+    'SELECT q.*, eq.nomor FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [examId]
+  )).rows);
+}
+
+function renderSheet({ exam, inst, kop, logos, student, items, qr1, qr2 }) {
+  return `${kopTypst({ kop, inst, logos })}
+${judulTypst(exam)}
+${metaTypst(exam)}
+${identitasTypst({ student, exam, qr: qr1 })}
+${soalTypst(items)}
+${lembarJawabanTypst({ student, exam, qr: qr2, items })}`;
+}
+
 async function sheetFor(examId, studentId) {
   let s = await pool.query('SELECT * FROM exam_sheets WHERE exam_id=$1 AND student_id=$2', [examId, studentId]);
   if (!s.rowCount) {
@@ -77,30 +77,26 @@ async function sheetFor(examId, studentId) {
   return s.rows[0];
 }
 
-async function renderSiswa(jobDir, exam, kop, student, items, sheet) {
-  const qr1 = `qr-${sheet.id}-1.png`;
-  const qr2 = `qr-${sheet.id}-2.png`;
-  await QR.toFile(path.join(jobDir, qr1), `${sheet.qr_base}:p1`, { width: 120 });
-  await QR.toFile(path.join(jobDir, qr2), `${sheet.qr_base}:p2`, { width: 120 });
-  return lembarSiswa({ kop, exam, student, items, qrBase: sheet.qr_base, qr1, qr2 });
-}
-
 async function printExam(examId) {
-  const exam = (await pool.query('SELECT * FROM exams WHERE id=$1', [examId])).rows[0];
-  if (!exam) throw new AppError('NOT_FOUND', 'Ujian tak ada.');
-  const items = (await pool.query('SELECT q.*, eq.nomor FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [examId])).rows;
+  const { exam, inst, kop } = await konteksUjian(examId);
+  const items = await ambilSoal(examId);
   if (!items.length) throw new AppError('VALIDATION_ERROR', 'Ujian belum punya soal.');
   const students = (await pool.query('SELECT * FROM students WHERE class_id=$1 AND is_active=true ORDER BY name', [exam.class_id])).rows;
   if (!students.length) throw new AppError('VALIDATION_ERROR', 'Kelas belum punya siswa.');
-  const kop = await getKop(exam.institution_id, exam.paper_size);
 
   const jobDir = path.join(DIR, `exam-${examId}-${Date.now()}`);
   fs.mkdirSync(jobDir, { recursive: true });
-  const parts = [`${paperSize(exam.paper_size)}\n#set text(lang: "id", size: 11pt)\n`];
-  for (const st of students) {
+  const logos = copyLogos(jobDir, inst);
+  const parts = [`${paperSize(exam.paper_size)}\n#set text(lang: "id", size: 10.5pt)\n`];
+  for (let i = 0; i < students.length; i++) {
+    const st = students[i];
     const sheet = await sheetFor(examId, st.id);
-    parts.push(await renderSiswa(jobDir, exam, kop, st, items.map((q) => ({ ...q, options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options })), sheet));
-    parts.push('#pagebreak()\n');
+    const qr1 = `qr-${sheet.id}-1.png`;
+    const qr2 = `qr-${sheet.id}-2.png`;
+    await QR.toFile(path.join(jobDir, qr1), `${sheet.qr_base}:p1`, { width: 120 });
+    await QR.toFile(path.join(jobDir, qr2), `${sheet.qr_base}:p2`, { width: 120 });
+    parts.push(renderSheet({ exam, inst, kop, logos, student: st, items, qr1, qr2 }));
+    if (i < students.length - 1) parts.push('#pagebreak()\n');
     await pool.query('UPDATE exam_sheets SET pdf_path=$1 WHERE id=$2', [jobDir, sheet.id]);
   }
   const typ = path.join(jobDir, 'semua.typ');
@@ -110,4 +106,31 @@ async function printExam(examId) {
   return { file: path.basename(jobDir) + `/cetak-ujian-${examId}.pdf`, sheets: students.length };
 }
 
-module.exports = { printExam, DIR };
+// Cetak ulang satu lembar memakai renderer yang sama dengan cetak semua.
+async function reprintSheet(sheetId) {
+  const sh = (await pool.query('SELECT * FROM exam_sheets WHERE id=$1', [sheetId])).rows[0];
+  if (!sh) throw new AppError('NOT_FOUND', 'Lembar tak ada.');
+  const student = (await pool.query('SELECT * FROM students WHERE id=$1', [sh.student_id])).rows[0];
+  const { exam, inst, kop } = await konteksUjian(sh.exam_id);
+  const items = await ambilSoal(sh.exam_id);
+
+  const jobDir = path.join(DIR, `reprint-${sheetId}-${Date.now()}`);
+  fs.mkdirSync(jobDir, { recursive: true });
+  const logos = copyLogos(jobDir, inst);
+  const qr1 = 'qr-1.png';
+  const qr2 = 'qr-2.png';
+  await QR.toFile(path.join(jobDir, qr1), `${sh.qr_base}:p1`, { width: 120 });
+  await QR.toFile(path.join(jobDir, qr2), `${sh.qr_base}:p2`, { width: 120 });
+
+  const typ = `${paperSize(exam.paper_size)}\n#set text(lang: "id", size: 10.5pt)\n${renderSheet({ exam, inst, kop, logos, student, items, qr1, qr2 })}`;
+  fs.writeFileSync(path.join(jobDir, 'satu.typ'), typ);
+  const pdf = path.join(jobDir, `lembar-${sheetId}.pdf`);
+  await compile(path.join(jobDir, 'satu.typ'), pdf);
+  return {
+    rel: `${path.basename(jobDir)}/lembar-${sheetId}.pdf`,
+    institution_id: exam.institution_id,
+    exam_id: exam.id,
+  };
+}
+
+module.exports = { printExam, reprintSheet, DIR };

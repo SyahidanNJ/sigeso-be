@@ -18,15 +18,28 @@ const uploadXlsx = multer({
   },
 });
 
+// Logo hanya PNG/JPG: SVG bisa membawa skrip dan disajikan dari origin yang sama.
+const uploadLogo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, f, cb) => {
+    const okType = ['image/png', 'image/jpeg'].includes(f.mimetype);
+    cb(okType ? null : new AppError('VALIDATION_ERROR', 'Logo harus PNG atau JPG.'), okType);
+  },
+});
+
 r.get('/institutions', asyncH(c.listInstitutions));
 r.post('/institutions', roles('superadmin'), asyncH(c.createInstitution));
 r.put('/institutions/me', roles('superadmin', 'admin', 'guru'), asyncH(c.updateInstitution));
+r.post('/institutions/logos', roles('superadmin', 'admin', 'guru'),
+  uploadLogo.fields([{ name: 'kiri', maxCount: 1 }, { name: 'kanan', maxCount: 1 }]), asyncH(c.uploadLogos));
 
 r.get('/users', roles('superadmin', 'admin'), asyncH(c.listUsers));
 r.post('/users', roles('superadmin', 'admin'), asyncH(c.createUser));
 
 r.get('/letterheads', asyncH(c.listLetterheads));
 r.post('/letterheads', roles('superadmin', 'admin'), asyncH(c.createLetterhead));
+r.put('/letterheads/me', roles('superadmin', 'admin', 'guru'), asyncH(c.updateLetterhead));
 
 r.get('/classes', asyncH(c.listClasses));
 r.post('/classes', roles('superadmin', 'admin', 'guru'), asyncH(c.createClass));

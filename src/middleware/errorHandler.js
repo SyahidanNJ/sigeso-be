@@ -11,6 +11,7 @@ const LABEL = {
   chapter_id: 'Bab', sub_chapter_id: 'Subbab', grade_level: 'Tingkat kelas',
   paper_size: 'Ukuran kertas', mode: 'Mode', institution_id: 'Institusi',
   header_markdown: 'Kop surat', count: 'Jumlah', qtypes: 'Tipe soal',
+  exam_type: 'Jenis ujian',
   rows: 'Baris', file: 'Berkas', foto: 'Foto',
 };
 
@@ -39,6 +40,12 @@ function errorHandler(err, req, res, next) {
   if (err && err.name === 'ZodError') {
     logger.warn({ requestId: res.locals.requestId, path: req.path }, 'validasi gagal');
     return fail(res, 400, 'VALIDATION_ERROR', pesanZod(err), null);
+  }
+  // MulterError tak punya httpStatus, jadi tanpa ini unggahan kebesaran
+  // dilaporkan sebagai "Terjadi kesalahan server."
+  if (err && err.name === 'MulterError') {
+    const pesan = err.code === 'LIMIT_FILE_SIZE' ? 'Berkas terlalu besar.' : 'Berkas tidak bisa diunggah.';
+    return fail(res, 400, 'VALIDATION_ERROR', pesan, null);
   }
   const status = err.httpStatus || 500;
   const code = err.httpStatus ? err.code : 'DB_ERROR';

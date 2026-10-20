@@ -240,7 +240,7 @@ async function cariBuat(cariSql, cariP, buatSql, buatP, label) {
     const ada = await satu('SELECT id FROM letterhead_templates WHERE institution_id=$1 AND name=$2', [inst.id, nama]);
     if (ada) continue;
     await pool.query('INSERT INTO letterhead_templates(institution_id,name,paper_size,header_markdown,is_default) VALUES($1,$2,$3,$4,true)',
-      [inst.id, nama, ukuran, 'PEMERINTAH KABUPATEN CONTOH\nDINAS PENDIDIKAN\nSD NEGERI CONTOH\nJl. Contoh No.1, Kec. Contoh']);
+      [inst.id, nama, ukuran, 'PEMERINTAH KABUPATEN CONTOH\nDINAS PENDIDIKAN']);
     baris.push(`kop ${ukuran}: baru`);
   }
 

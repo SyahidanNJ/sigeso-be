@@ -75,3 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_generated_exam ON generated_files(exam_id);
 -- Kelas lama (tanpa jenjang) dibuang; siswa & ujiannya ikut terhapus.
 DELETE FROM exams WHERE class_id IN (SELECT id FROM classes WHERE jenjang IS NULL);
 DELETE FROM classes WHERE jenjang IS NULL;
+-- Logo kop: kiri = pemerintah provinsi/kabupaten, kanan = sekolah (logo_path).
+ALTER TABLE institutions ADD COLUMN IF NOT EXISTS logo_left_path TEXT;
+-- Jenis ujian yang tercetak sebagai judul (mis. "Ulangan Harian", "USP").
+ALTER TABLE exams ADD COLUMN IF NOT EXISTS exam_type TEXT NOT NULL DEFAULT 'Ulangan Harian';

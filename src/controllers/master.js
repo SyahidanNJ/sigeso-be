@@ -1,4 +1,7 @@
 const bcrypt = require('bcryptjs');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const { z } = require('zod');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
@@ -30,6 +33,43 @@ async function updateInstitution(req, res) {
   if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Institusi tak ada.');
   await audit(req, 'update', 'institutions', inst);
   ok(res, q.rows[0], 'Data sekolah disimpan.');
+}
+
+// ---- LOGO KOP ----
+const UPLOAD = path.join(__dirname, '..', '..', 'uploads');
+const DIR_LOGO = path.join(UPLOAD, 'logo');
+const EXT_LOGO = { 'image/png': '.png', 'image/jpeg': '.jpg' };
+
+// Satu permintaan bisa membawa kedua logo; yang tidak dikirim dibiarkan apa adanya.
+async function uploadLogos(req, res) {
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const kiri = req.files?.kiri?.[0];
+  const kanan = req.files?.kanan?.[0];
+  if (!kiri && !kanan) return fail(res, 400, 'VALIDATION_ERROR', 'Pilih berkas logo dulu.');
+
+  const lama = (await pool.query('SELECT logo_path, logo_left_path FROM institutions WHERE id=$1', [inst])).rows[0];
+  if (!lama) return fail(res, 404, 'NOT_FOUND', 'Institusi tak ada.');
+
+  const dir = path.join(DIR_LOGO, String(inst));
+  fs.mkdirSync(dir, { recursive: true });
+  const simpan = (f) => {
+    const nama = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${EXT_LOGO[f.mimetype]}`;
+    fs.writeFileSync(path.join(dir, nama), f.buffer);
+    return path.posix.join('logo', String(inst), nama);
+  };
+  const relKiri = kiri ? simpan(kiri) : lama.logo_left_path;
+  const relKanan = kanan ? simpan(kanan) : lama.logo_path;
+  const q = await pool.query('UPDATE institutions SET logo_left_path=$1, logo_path=$2 WHERE id=$3 RETURNING *', [relKiri, relKanan, inst]);
+
+  // Berkas lama baru dibuang setelah baris database tersimpan.
+  for (const [f, rel] of [[kiri, lama.logo_left_path], [kanan, lama.logo_path]]) {
+    if (!f || !rel) continue;
+    const p = path.resolve(UPLOAD, rel);
+    if (p.startsWith(UPLOAD + path.sep)) fs.rmSync(p, { force: true });
+  }
+  await audit(req, 'update', 'institutions', inst);
+  ok(res, q.rows[0], 'Logo disimpan.');
 }
 
 // ---- PENGGUNA (admin kelola guru di institusinya) ----
@@ -69,6 +109,20 @@ async function createLetterhead(req, res) {
     [inst, p.name, p.paper_size, p.header_markdown, !!p.is_default]
   );
   ok(res, q.rows[0], 'Template kop disimpan.');
+}
+
+// Baris pemerintah di kop dipakai semua ujian; ukuran kertas hanya mengubah margin.
+async function updateLetterhead(req, res) {
+  const p = z.object({ header_markdown: z.string().max(300) }).parse(req.body);
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const isi = p.header_markdown.split('\n').map((s) => s.trim()).filter(Boolean).join('\n');
+  const q = await pool.query('UPDATE letterhead_templates SET header_markdown=$1 WHERE institution_id=$2 RETURNING id', [isi, inst]);
+  if (!q.rowCount) {
+    await pool.query("INSERT INTO letterhead_templates(institution_id,name,paper_size,header_markdown,is_default) VALUES($1,'Kop sekolah','A4',$2,true),($1,'Kop sekolah','F4',$2,true)", [inst, isi]);
+  }
+  await audit(req, 'update', 'letterheads', inst);
+  ok(res, { header_markdown: isi }, 'Kop surat disimpan.');
 }
 
 // ---- KELAS ----
@@ -290,8 +344,8 @@ async function stats(req, res) {
 }
 
 module.exports = {
-  listInstitutions, createInstitution, updateInstitution, listUsers, createUser,
-  listLetterheads, createLetterhead, listClasses, createClass, updateClass, deleteClass,
+  listInstitutions, createInstitution, updateInstitution, uploadLogos, listUsers, createUser,
+  listLetterheads, createLetterhead, updateLetterhead, listClasses, createClass, updateClass, deleteClass,
   listStudents, createStudent, updateStudent, deleteStudent, importStudents, importStudentsFile,
   listSubjects, createSubject, updateSubject, deleteSubject, listTopics, createTopic, updateTopic, deleteTopic,
   listChapters, createChapter, updateChapter, deleteChapter, listSubchapters, createSubchapter, updateSubchapter, deleteSubchapter,

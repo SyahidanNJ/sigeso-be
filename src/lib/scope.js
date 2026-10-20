@@ -1,6 +1,9 @@
 // Helper multi-tenant: non-superadmin dikunci ke institusinya sendiri.
+// Superadmin boleh menyasar institusi lain lewat body/query, tapi kalau tidak
+// menyebut apa pun dia jatuh ke institusinya sendiri (tanpa ini, akun seed
+// superadmin tak bisa memakai halaman Kelas sama sekali).
 function tenantId(req, bodyInst) {
-  if (req.user.role === 'superadmin') return bodyInst ?? req.query.institution_id ?? null;
+  if (req.user.role === 'superadmin') return bodyInst ?? req.query.institution_id ?? req.user.institution_id ?? null;
   return req.user.institution_id;
 }
 

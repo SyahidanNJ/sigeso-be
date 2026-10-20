@@ -27,6 +27,7 @@ app.use('/api/v1', require('./routes/grade'));
 app.use('/api/v1', require('./routes/export'));
 app.use('/api/v1', require('./routes/download'));
 app.use('/api/v1', require('./routes/jobs'));
+app.use('/api/v1', require('./routes/referensi'));
 
 app.use((req, res) => res.status(404).json({ status: false, error: true, code: 'NOT_FOUND', message: 'Rute tidak ada.', details: null, data: null, requestId: res.locals.requestId }));
 app.use(errorHandler);

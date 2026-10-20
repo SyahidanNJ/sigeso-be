@@ -6,10 +6,22 @@ const cheerio = require('cheerio');
 const { z } = require('zod');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
+const { needTenant } = require('../lib/scope');
 const { AppError } = require('../lib/errors');
+const { audit } = require('./bantuan');
 
 const DIR = path.join(__dirname, '..', '..', 'uploads', 'sources');
+const UPLOAD = path.join(__dirname, '..', '..', 'uploads');
 fs.mkdirSync(DIR, { recursive: true });
+
+// Multer menyimpan nama acak tanpa ekstensi, jadi nama asli disimpan terpisah.
+const namaBerkas = (s) => s.original_name || (s.file_path ? path.basename(s.file_path) : null);
+
+// Hanya berkas di dalam folder uploads yang boleh dibaca/dihapus.
+function diDalamUploads(p) {
+  const f = path.resolve(p);
+  return f.startsWith(path.resolve(UPLOAD) + path.sep) ? f : null;
+}
 
 async function extractText(filePath, ext) {
   if (ext === '.txt') return fs.readFileSync(filePath, 'utf8').slice(0, 200000);
@@ -53,8 +65,8 @@ async function robotsAllowed(url) {
 // shortcut: ekstraksi sinkron (file kecil). Upgrade ke pg-boss bila file besar/menumpuk.
 async function uploadSource(req, res) {
   const sub = Number(req.body.sub_chapter_id) || null;
-  const inst = req.user.role === 'superadmin' ? Number(req.body.institution_id) : req.user.institution_id;
-  if (!inst) return fail(res, 400, 'VALIDATION_ERROR', 'institution_id wajib.');
+  const inst = needTenant(req, res, req.body.institution_id);
+  if (!inst) return;
   if (!req.file) return fail(res, 400, 'VALIDATION_ERROR', 'File wajib.');
   const ext = path.extname(req.file.originalname).toLowerCase();
   try {
@@ -62,10 +74,10 @@ async function uploadSource(req, res) {
     const txtPath = req.file.path + '.txt';
     fs.writeFileSync(txtPath, text);
     const q = await pool.query(
-      "INSERT INTO sources(institution_id,sub_chapter_id,kind,file_path,extracted_path,status,created_by) VALUES($1,$2,'upload',$3,$4,'done',$5) RETURNING *",
-      [inst, sub, req.file.path, txtPath, req.user.id]
+      "INSERT INTO sources(institution_id,sub_chapter_id,kind,file_path,extracted_path,status,created_by,original_name) VALUES($1,$2,'upload',$3,$4,'done',$5,$6) RETURNING *",
+      [inst, sub, req.file.path, txtPath, req.user.id, req.file.originalname]
     );
-    ok(res, { ...q.rows[0], chars: text.length }, 'Materi diunggah dan diekstrak.');
+    ok(res, { ...q.rows[0], chars: text.length }, 'Berkas materi tersimpan.');
   } catch (e) {
     await pool.query("INSERT INTO sources(institution_id,sub_chapter_id,kind,file_path,status,error,created_by) VALUES($1,$2,'upload',$3,'failed',$4,$5)", [inst, sub, req.file.path, String(e.message).slice(0, 500), req.user.id]);
     throw new AppError('SOURCE_SCRAPE_FAILED', 'Gagal mengekstrak file.');
@@ -79,8 +91,8 @@ async function scrapeUrl(req, res) {
   const addrs = await dns.lookup(u.hostname, { all: true }).catch(() => { throw new AppError('SOURCE_SCRAPE_FAILED', 'Domain tak dikenal.'); });
   if (addrs.some((a) => isPrivateIp(a.address))) throw new AppError('SOURCE_BLOCKED_SSRF', 'URL menunjuk ke jaringan internal, diblokir.');
   if (!(await robotsAllowed(p.url))) throw new AppError('SOURCE_BLOCKED_SSRF', 'robots.txt melarang scraping URL ini.');
-  const inst = req.user.role === 'superadmin' ? Number(req.body.institution_id) : req.user.institution_id;
-  if (!inst) return fail(res, 400, 'VALIDATION_ERROR', 'institution_id wajib untuk superadmin.');
+  const inst = needTenant(req, res, req.body.institution_id);
+  if (!inst) return;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 10000);
   let html = '';
@@ -105,14 +117,45 @@ async function scrapeUrl(req, res) {
     "INSERT INTO sources(institution_id,sub_chapter_id,kind,original_url,extracted_path,status,created_by) VALUES($1,$2,'url',$3,$4,'done',$5) RETURNING *",
     [inst, p.sub_chapter_id || null, p.url, f, req.user.id]
   );
-  ok(res, { ...q.rows[0], chars: clean.length }, 'URL berhasil di-scrape.');
+  ok(res, { ...q.rows[0], chars: clean.length }, 'Materi dari link tersimpan.');
 }
 
 async function listSources(req, res) {
   const q = req.query.sub_chapter_id
-    ? await pool.query('SELECT id,kind,original_url,status,error FROM sources WHERE sub_chapter_id=$1 ORDER BY id DESC', [req.query.sub_chapter_id])
-    : await pool.query('SELECT id,kind,original_url,status,error FROM sources WHERE institution_id=$1 ORDER BY id DESC LIMIT 50', [req.user.institution_id]);
-  ok(res, q.rows);
+    ? await pool.query('SELECT id,kind,original_url,original_name,file_path,status,error FROM sources WHERE sub_chapter_id=$1 AND institution_id=$2 ORDER BY id DESC', [req.query.sub_chapter_id, req.user.institution_id])
+    : await pool.query('SELECT id,kind,original_url,original_name,file_path,status,error FROM sources WHERE institution_id=$1 ORDER BY id DESC LIMIT 50', [req.user.institution_id]);
+  // Path mentah tak perlu sampai ke layar; cukup nama berkasnya.
+  ok(res, q.rows.map(({ file_path, ...s }) => ({ ...s, nama: namaBerkas({ ...s, file_path }) })));
 }
 
-module.exports = { DIR, uploadSource, scrapeUrl, listSources };
+// Buka/unduh berkas materi yang diunggah (wajib login, jalur dibatasi ke uploads).
+async function downloadSource(req, res) {
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const r = await pool.query('SELECT * FROM sources WHERE id=$1 AND institution_id=$2', [req.params.id, inst]);
+  const s = r.rows[0];
+  if (!s) return fail(res, 404, 'NOT_FOUND', 'Materi tak ditemukan.');
+  const f = s.file_path && diDalamUploads(s.file_path);
+  if (!f || !fs.existsSync(f)) return fail(res, 404, 'NOT_FOUND', 'Berkas materi sudah tak ada di server.');
+  res.download(f, namaBerkas(s));
+}
+
+async function deleteSource(req, res) {
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const r = await pool.query('SELECT * FROM sources WHERE id=$1 AND institution_id=$2', [req.params.id, inst]);
+  const s = r.rows[0];
+  if (!s) return fail(res, 404, 'NOT_FOUND', 'Materi tak ditemukan.');
+  // questions.source_id tak memakai cascade: materi yang sudah jadi bahan soal harus dilepas dulu.
+  const n = (await pool.query('SELECT COUNT(*)::int AS n FROM questions WHERE source_id=$1', [s.id])).rows[0].n;
+  if (n) return fail(res, 400, 'VALIDATION_ERROR', `Materi ini dipakai ${n} soal. Hapus soalnya dulu, baru materinya bisa dibuang.`);
+  await pool.query('DELETE FROM sources WHERE id=$1', [s.id]);
+  for (const p of [s.file_path, s.extracted_path]) {
+    const f = p && diDalamUploads(p);
+    if (f) { try { fs.unlinkSync(f); } catch { /* memang sudah tak ada */ } }
+  }
+  await audit(req, 'delete', 'sources', s.id);
+  ok(res, { id: s.id }, 'Materi dihapus.');
+}
+
+module.exports = { DIR, uploadSource, scrapeUrl, listSources, downloadSource, deleteSource };

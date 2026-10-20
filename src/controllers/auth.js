@@ -56,7 +56,7 @@ async function login(req, res, next) {
     if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
     const r = await pool.query('SELECT * FROM users WHERE email=$1 AND is_active=true', [p.email]);
     const u = r.rows[0];
-    if (!u || !(await bcrypt.compare(p.password, u.password_hash))) return fail(res, 401, 'UNAUTHORIZED', 'Email atau password salah.');
+    if (!u || !(await bcrypt.compare(p.password, u.password_hash))) return fail(res, 401, 'UNAUTHORIZED', 'Email atau kata sandi salah.');
     await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity) VALUES($1,$2,$3,$4,$5)', [res.locals.requestId, u.id, u.institution_id, 'login', 'users']);
     return ok(res, { token: sign(u), user: { id: u.id, name: u.name, role: u.role } }, 'Login berhasil.');
   } catch (e) {
@@ -64,14 +64,58 @@ async function login(req, res, next) {
   }
 }
 
-function me(req, res) {
-  const h = req.headers.authorization || '';
+// Profil dibaca dari database (bukan cuma isi token) supaya halaman Profil
+// bisa menampilkan nama, email, dan sekolah yang terbaru.
+async function me(req, res, next) {
   try {
-    const u = jwt.verify(h.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev');
-    return ok(res, u);
+    const h = req.headers.authorization || '';
+    const t = jwt.verify(h.replace('Bearer ', ''), process.env.JWT_SECRET || 'dev');
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    const r = await pool.query(
+      'SELECT u.id, u.name, u.email, u.role, i.name AS school FROM users u LEFT JOIN institutions i ON i.id = u.institution_id WHERE u.id = $1',
+      [t.id]
+    );
+    if (!r.rowCount) return fail(res, 401, 'UNAUTHORIZED', 'Pengguna tak ditemukan.');
+    return ok(res, r.rows[0]);
   } catch {
     return fail(res, 401, 'UNAUTHORIZED', 'Token tidak valid.');
   }
 }
 
-module.exports = { throttle, institutionsPublic, register, login, me };
+// Guru boleh mengganti nama tampilannya sendiri; email dan peran tidak.
+async function updateProfile(req, res, next) {
+  try {
+    const p = z.object({ name: z.string().trim().min(1, 'Nama belum diisi.').max(120) }).parse(req.body);
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    const r = await pool.query('UPDATE users SET name=$1 WHERE id=$2 RETURNING id, name, email, role', [p.name, req.user.id]);
+    if (!r.rowCount) return fail(res, 401, 'UNAUTHORIZED', 'Pengguna tak ditemukan.');
+    await pool.query(
+      'INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id) VALUES($1,$2,$3,$4,$5,$6)',
+      [res.locals.requestId, req.user.id, req.user.institution_id, 'change_profile', 'users', req.user.id]
+    );
+    return ok(res, r.rows[0], 'Nama diganti.');
+  } catch (e) {
+    return next(e.code ? e : Object.assign(e, { code: 'VALIDATION_ERROR', httpStatus: 400 }));
+  }
+}
+
+async function changePassword(req, res, next) {
+  try {
+    const p = z.object({ lama: z.string().min(1), baru: z.string().min(6) }).parse(req.body);
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    const r = await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.user.id]);
+    if (!r.rowCount || !(await bcrypt.compare(p.lama, r.rows[0].password_hash))) {
+      return fail(res, 400, 'VALIDATION_ERROR', 'Kata sandi lama salah.');
+    }
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [await bcrypt.hash(p.baru, 10), req.user.id]);
+    await pool.query(
+      'INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id) VALUES($1,$2,$3,$4,$5,$6)',
+      [res.locals.requestId, req.user.id, req.user.institution_id, 'change_password', 'users', req.user.id]
+    );
+    return ok(res, { id: req.user.id }, 'Kata sandi diganti.');
+  } catch (e) {
+    return next(e.code ? e : Object.assign(e, { code: 'VALIDATION_ERROR', httpStatus: 400 }));
+  }
+}
+
+module.exports = { throttle, institutionsPublic, register, login, me, updateProfile, changePassword };

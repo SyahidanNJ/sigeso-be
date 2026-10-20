@@ -5,9 +5,13 @@ const CODES = {
   NOT_FOUND: 404,
   QUOTA_EXCEEDED: 429,
   SOURCE_SCRAPE_FAILED: 502,
+  // Situs referensi hidup, tapi bentuk halaman/datanya berubah.
+  SOURCE_CHANGED: 502,
   SOURCE_BLOCKED_SSRF: 400,
   LLM_TIMEOUT: 504,
   LLM_INVALID_JSON: 502,
+  // Model membalas, tapi isinya tak bisa dibaca sebagai penilaian (mis. prosa).
+  LLM_UNREADABLE: 502,
   LLM_ERROR: 502,
   QR_NOT_FOUND: 400,
   PAGES_INCOMPLETE: 400,

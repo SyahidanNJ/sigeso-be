@@ -7,7 +7,6 @@ const GeneratedQ = z.object({
   answer_key: z.string().min(1),
   weight: z.number().positive().default(1),
   rubric: z.string().optional(),
-  difficulty: z.enum(['mudah', 'sedang', 'sukar']),
 }).superRefine((q, ctx) => {
   if (q.qtype === 'PG') {
     if (!q.options || q.options.length < 2) ctx.addIssue({ code: 'custom', message: 'PG wajib ≥2 opsi' });
@@ -18,10 +17,10 @@ const GeneratedQ = z.object({
 });
 const GeneratedSet = z.object({ questions: z.array(GeneratedQ).min(1) });
 
-function buildGeneratePrompt({ materi, count, qtypes, difficulty }) {
+function buildGeneratePrompt({ materi, count, qtypes }) {
   return [
     { role: 'system', content: 'Kamu pembuat soal kurikulum Merdeka untuk guru Indonesia. Jawab HANYA JSON valid sesuai schema, tanpa teks lain. Bahasa Indonesia. Jangan mengarang fakta di luar materi.' },
-    { role: 'user', content: `Buat ${count} soal (${qtypes.join(', ')}) tingkat ${difficulty} dari materi:\n---\n${materi.slice(0, 12000)}\n---\nFormat: {"questions":[{"qtype":"PG|ISIAN|URAIAN","text":"...","options":["A. ...","B. ..."],"answer_key":"B","weight":1,"rubric":"...","difficulty":"..."}]}. Untuk PG, answer_key = huruf opsi.` },
+    { role: 'user', content: `Buat ${count} soal (${qtypes.join(', ')}) dari materi:\n---\n${materi.slice(0, 12000)}\n---\nFormat: {"questions":[{"qtype":"PG|ISIAN|URAIAN","text":"...","options":["A. ...","B. ..."],"answer_key":"B","weight":1,"rubric":"..."}]}. Untuk PG, answer_key = huruf opsi.` },
   ];
 }
 

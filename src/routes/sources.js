@@ -21,5 +21,7 @@ const upload = multer({
 r.post('/sources/upload', roles('superadmin', 'admin', 'guru'), upload.single('file'), asyncH(c.uploadSource));
 r.post('/sources/url', roles('superadmin', 'admin', 'guru'), asyncH(c.scrapeUrl));
 r.get('/sources', asyncH(c.listSources));
+r.get('/sources/:id/file', asyncH(c.downloadSource));
+r.delete('/sources/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.deleteSource));
 
 module.exports = r;

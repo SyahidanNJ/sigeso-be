@@ -5,6 +5,7 @@ const ExcelJS = require('exceljs');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
 const { AppError } = require('../lib/errors');
+const { catatBerkas } = require('../lib/berkas');
 
 const DIR = path.join(__dirname, '..', '..', 'uploads', 'export');
 fs.mkdirSync(DIR, { recursive: true });
@@ -56,6 +57,7 @@ async function exportNilai(req, res) {
     return fail(res, 400, 'VALIDATION_ERROR', 'format: xlsx, pdf, docx.');
   }
 
+  await catatBerkas({ institution_id: exam.institution_id, exam_id: exam.id, kind: 'nilai', rel });
   await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [res.locals.requestId, req.user.id, req.user.institution_id, 'export', 'exams', req.params.id, { format }]);
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Ekspor siap diunduh.');
@@ -122,6 +124,7 @@ async function exportDokumen(req, res) {
   } else {
     return fail(res, 400, 'VALIDATION_ERROR', 'format: pdf, docx.');
   }
+  await catatBerkas({ institution_id: exam.institution_id, exam_id: exam.id, kind: 'dokumen', rel });
   await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [res.locals.requestId, req.user.id, req.user.institution_id, 'export-doc', 'exams', req.params.id, { format, isi }]);
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Dokumen soal siap diunduh.');

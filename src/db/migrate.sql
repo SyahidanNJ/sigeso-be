@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS sources(id SERIAL PRIMARY KEY, institution_id INT NOT
 CREATE TABLE IF NOT EXISTS questions(id SERIAL PRIMARY KEY, institution_id INT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
   subject_id INT REFERENCES subjects(id), topic_id INT REFERENCES topics(id), chapter_id INT REFERENCES chapters(id), sub_chapter_id INT REFERENCES sub_chapters(id),
   qtype TEXT CHECK(qtype IN ('PG','ISIAN','URAIAN')), text TEXT NOT NULL, options JSONB, answer_key TEXT NOT NULL,
-  weight NUMERIC DEFAULT 1, rubric TEXT, difficulty TEXT CHECK(difficulty IN ('mudah','sedang','sukar')), source_id INT REFERENCES sources(id), created_by INT REFERENCES users(id), updated_at TIMESTAMPTZ DEFAULT now());
+  weight NUMERIC DEFAULT 1, rubric TEXT, source_id INT REFERENCES sources(id), created_by INT REFERENCES users(id), updated_at TIMESTAMPTZ DEFAULT now());
 CREATE TABLE IF NOT EXISTS exams(id SERIAL PRIMARY KEY, institution_id INT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
   subject_id INT REFERENCES subjects(id), class_id INT NOT NULL REFERENCES classes(id),
   title TEXT NOT NULL, mode TEXT CHECK(mode IN ('SATU_LEMBAR','TERPISAH','HEMAT')) DEFAULT 'SATU_LEMBAR',
@@ -52,6 +52,26 @@ CREATE INDEX IF NOT EXISTS idx_sub_img ON submission_images(submission_id);
 CREATE INDEX IF NOT EXISTS idx_llm_req ON llm_usage_logs(request_id);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_q_bank ON questions(institution_id, subject_id, topic_id);
--- Hapus kolom mati (Tingkat kelas tak dipakai, hitungan cetak tak dipakai)
-ALTER TABLE classes DROP COLUMN IF EXISTS level;
+-- Hitungan cetak tak dipakai
 ALTER TABLE exam_sheets DROP COLUMN IF EXISTS print_count;
+-- Tingkat kesulitan dibuang: tak pernah ditampilkan atau dipakai di layar mana pun.
+ALTER TABLE questions DROP COLUMN IF EXISTS difficulty;
+-- Jenjang + tingkat kelas: SD/MI 1-6, SMP 7-9, SMA 10-12.
+ALTER TABLE classes ADD COLUMN IF NOT EXISTS jenjang TEXT CHECK(jenjang IN ('SD','SMP','SMA'));
+ALTER TABLE classes ADD COLUMN IF NOT EXISTS level INT;
+-- Nama asli berkas materi; multer menyimpan nama acak tanpa ekstensi.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS original_name TEXT;
+-- Berkas hasil cetak/ekspor dicatat supaya bisa ikut terhapus bersama ujiannya
+-- (sebelumnya hanya ditulis ke disk, tak ada yang tahu pemiliknya).
+CREATE TABLE IF NOT EXISTS generated_files(
+  id SERIAL PRIMARY KEY,
+  institution_id INT REFERENCES institutions(id) ON DELETE CASCADE,
+  exam_id INT REFERENCES exams(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  rel_path TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_generated_exam ON generated_files(exam_id);
+-- Kelas lama (tanpa jenjang) dibuang; siswa & ujiannya ikut terhapus.
+DELETE FROM exams WHERE class_id IN (SELECT id FROM classes WHERE jenjang IS NULL);
+DELETE FROM classes WHERE jenjang IS NULL;

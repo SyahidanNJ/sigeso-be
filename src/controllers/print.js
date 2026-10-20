@@ -4,10 +4,12 @@ const { execFile } = require('child_process');
 const QR = require('qrcode');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
+const { catatBerkas } = require('../lib/berkas');
 const { printExam, DIR } = require('../services/print');
 
 async function printUjian(req, res) {
   const out = await printExam(req.params.id);
+  await catatBerkas({ institution_id: req.user.institution_id, exam_id: Number(req.params.id), kind: 'cetak', rel: `print/${out.file}` });
   await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [res.locals.requestId, req.user.id, req.user.institution_id, 'print', 'exams', req.params.id, out]);
   ok(res, { download: `/api/v1/downloads/${out.file}`, ...out }, `${out.sheets} lembar dicetak.`);
@@ -41,6 +43,7 @@ async function reprintSheet(req, res) {
   const pdf = path.join(jobDir, `lembar-${sh.id}.pdf`);
   await new Promise((resolve, reject) => execFile(process.env.TYPST_BIN || 'typst', ['compile', path.join(jobDir, 'satu.typ'), pdf], { timeout: 60000 }, (e) => (e ? reject(e) : resolve())));
   const rel = path.basename(jobDir) + `/lembar-${sh.id}.pdf`;
+  await catatBerkas({ institution_id: sh.institution_id, exam_id: sh.exam_id, kind: 'cetak-ulang', rel: `print/${rel}` });
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Lembar ulang dicetak.');
 }
 

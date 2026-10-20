@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
 const { AppError } = require('../lib/errors');
+const logger = require('../lib/logger');
 const { generateText } = require('../services/llm');
 const { GradeOut, buildGradePrompt, parseJson } = require('../services/llm/prompts');
 
@@ -47,12 +48,19 @@ async function uploadJawaban(req, res) {
     try {
       hasil = GradeOut.parse(parseJson(raw));
     } catch {
+      // Jawaban mentah dicatat: dulu hilang, jadi gagal dinilai tak bisa ditelusuri.
+      logger.warn({ requestId: res.locals.requestId, jawaban: String(raw).slice(0, 400) }, 'AI menilai foto tapi bukan JSON, diulang');
       const raw2 = await generateText([{ role: 'user', content: [...content, { type: 'text', text: 'Jawabanmu bukan JSON valid. Ulangi HANYA dengan JSON.' }] }], {});
-      hasil = GradeOut.parse(parseJson(raw2));
+      try {
+        hasil = GradeOut.parse(parseJson(raw2));
+      } catch (e2) {
+        logger.warn({ requestId: res.locals.requestId, jawaban: String(raw2).slice(0, 400) }, 'AI menilai foto tetap bukan JSON');
+        throw e2;
+      }
     }
   } catch (e) {
     await pool.query("UPDATE submissions SET status='needs_review', feedback=$1 WHERE id=$2", ['Gagal dinilai otomatis, isi manual.', sub.id]);
-    throw e.code ? e : new AppError('LLM_INVALID_JSON', 'Gagal membaca foto, isi manual.');
+    throw e.code ? e : new AppError('LLM_UNREADABLE', 'Gagal membaca foto jawaban, isi manual.');
   }
   const benar = new Set(hasil.pg.filter((x) => x.benar).map((x) => x.nomor));
   let tot = 0, dpt = 0;
@@ -62,7 +70,7 @@ async function uploadJawaban(req, res) {
     [pgScore, JSON.stringify(hasil.uraian), pgScore, hasil.feedback, req.user.id, sub.id]);
   await pool.query('INSERT INTO llm_usage_logs(request_id,user_id,institution_id,feature,model,duration_ms,status) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [res.locals.requestId, req.user.id, req.user.institution_id, 'grade', process.env.LLM_DEFAULT_MODEL, Date.now() - t0, 'success']);
-  ok(res, { submission_id: sub.id, pg_score: pgScore, uraian: hasil.uraian, feedback: hasil.feedback }, 'Dinilai. Wajib review sebelum kunci.');
+  ok(res, { submission_id: sub.id, exam_id: sheet.exam_id, pg_score: pgScore, uraian: hasil.uraian, feedback: hasil.feedback }, 'Dinilai. Wajib review sebelum kunci.');
 }
 
 async function listSubmissions(req, res) {

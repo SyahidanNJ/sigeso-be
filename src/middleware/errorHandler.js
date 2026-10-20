@@ -4,7 +4,7 @@ const { fail } = require('../lib/respond');
 const LABEL = {
   name: 'Nama', academic_year: 'Tahun ajaran', nis: 'NIS',
   title: 'Judul', text: 'Soal', answer_key: 'Kunci jawaban', options: 'Pilihan',
-  weight: 'Bobot', rubric: 'Rubrik', difficulty: 'Tingkat kesulitan',
+  weight: 'Bobot', rubric: 'Rubrik',
   email: 'Email', password: 'Kata sandi', url: 'URL', qr_code: 'Kode QR',
   final_score: 'Nilai', feedback: 'Masukan', question_ids: 'Soal',
   class_id: 'Kelas', subject_id: 'Mapel', topic_id: 'Topik',

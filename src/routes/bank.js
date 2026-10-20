@@ -8,12 +8,15 @@ r.use(auth);
 
 r.get('/questions', asyncH(c.listQuestions));
 r.post('/questions', roles(...GURU), asyncH(c.createQuestion));
+r.put('/questions/:id', roles(...GURU), asyncH(c.updateQuestion));
 r.delete('/questions/:id', roles(...GURU), asyncH(c.deleteQuestion));
 
 r.post('/generate', roles(...GURU), asyncH(c.generateQuestions));
 
 r.get('/exams', asyncH(c.listExams));
 r.post('/exams', roles(...GURU), asyncH(c.createExam));
+r.put('/exams/:id', roles(...GURU), asyncH(c.updateExam));
+r.delete('/exams/:id', roles(...GURU), asyncH(c.deleteExam));
 r.get('/exams/:id/items', asyncH(c.listExamItems));
 r.put('/exams/:id/items', roles(...GURU), asyncH(c.setExamItems));
 

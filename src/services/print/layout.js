@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { UPLOAD } = require('../../lib/berkas');
+const { rapikanGambar } = require('../../lib/gambar');
 
 // Potongan Typst untuk lembar cetak. Dipakai bersama oleh cetak, cetak ulang,
 // dan ekspor dokumen supaya ketiganya tak pernah berbeda layout.
@@ -21,6 +22,7 @@ const JENIS = {
 };
 
 // Typst mencari gambar relatif terhadap file .typ, jadi logo disalin ke folder job.
+// Pinggiran kosong dipotong dulu agar kedua logo terlihat sama besar.
 function copyLogos(jobDir, inst) {
   const hasil = { kiri: null, kanan: null };
   const dasar = path.resolve(UPLOAD);
@@ -28,9 +30,14 @@ function copyLogos(jobDir, inst) {
     if (!rel) continue;
     const src = path.resolve(dasar, rel);
     if (!src.startsWith(dasar + path.sep) || !fs.existsSync(src)) continue;
-    const nama = `logo-${sisi}${path.extname(src).toLowerCase()}`;
-    fs.copyFileSync(src, path.join(jobDir, nama));
-    hasil[sisi] = nama;
+    const nama = `logo-${sisi}.png`;
+    if (rapikanGambar(src, path.join(jobDir, nama))) {
+      hasil[sisi] = nama;
+      continue;
+    }
+    const asli = `logo-${sisi}${path.extname(src).toLowerCase()}`;
+    fs.copyFileSync(src, path.join(jobDir, asli));
+    hasil[sisi] = asli;
   }
   return hasil;
 }
@@ -44,7 +51,8 @@ function kopTypst({ kop, inst, logos = {} }) {
     ...(inst?.address ? ['#v(1pt)', `#text(size: 9pt)[${esc(inst.address)}]`] : []),
   ].filter(Boolean);
 
-  const gambar = (f) => (f ? `#image("${f}", width: 1.8cm)` : '');
+  // Tinggi sama untuk kedua logo; lebar mengikuti rasio asli agar tak gepeng.
+  const gambar = (f) => (f ? `#image("${f}", width: 2cm, height: 1.8cm, fit: "contain")` : '');
   return `#grid(
   columns: (2.2cm, 1fr, 2.2cm),
   align: (center + horizon, center + top, center + horizon),

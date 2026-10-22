@@ -7,6 +7,7 @@ const { AppError } = require('../lib/errors');
 const logger = require('../lib/logger');
 const { generateText } = require('../services/llm');
 const { GradeOut, buildGradePrompt, parseJson } = require('../services/llm/prompts');
+const { tenantId, ujianMilik } = require('../lib/scope');
 
 const DIR = path.join(__dirname, '..', '..', 'uploads', 'jawaban');
 fs.mkdirSync(DIR, { recursive: true });
@@ -19,7 +20,11 @@ async function uploadJawaban(req, res) {
   const page = (await pool.query('SELECT * FROM exam_sheet_pages WHERE qr_code=$1', [p.qr_code])).rows[0]
     || (await pool.query('SELECT * FROM exam_sheet_pages WHERE qr_code LIKE $1 ORDER BY page_no LIMIT 1', [`${p.qr_code}%`])).rows[0];
   if (!page) throw new AppError('QR_NOT_FOUND', 'QR tak dikenal. Ketik ulang kode di bawah QR.');
-  const sheet = (await pool.query('SELECT sh.*, e.id AS exam_id FROM exam_sheets sh JOIN exams e ON e.id=sh.exam_id WHERE sh.id=$1', [page.sheet_id])).rows[0];
+  const sheet = (await pool.query(
+    'SELECT sh.*, e.id AS exam_id FROM exam_sheets sh JOIN exams e ON e.id=sh.exam_id WHERE sh.id=$1 AND e.institution_id=$2',
+    [page.sheet_id, tenantId(req)]
+  )).rows[0];
+  if (!sheet) return fail(res, 404, 'NOT_FOUND', 'Lembar jawaban tak ditemukan.');
 
   let sub = (await pool.query('SELECT * FROM submissions WHERE sheet_id=$1', [sheet.id])).rows[0];
   if (!sub) sub = (await pool.query("INSERT INTO submissions(sheet_id,status) VALUES($1,'needs_review') RETURNING *", [sheet.id])).rows[0];
@@ -75,6 +80,7 @@ async function uploadJawaban(req, res) {
 
 async function listSubmissions(req, res) {
   if (!req.query.exam_id) return fail(res, 400, 'VALIDATION_ERROR', 'exam_id wajib.');
+  if (!(await ujianMilik(tenantId(req), req.query.exam_id))) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
   ok(res, (await pool.query(
     'SELECT s.*, st.name, st.nis FROM submissions s JOIN exam_sheets sh ON sh.id=s.sheet_id JOIN students st ON st.id=sh.student_id WHERE sh.exam_id=$1 ORDER BY st.name', [req.query.exam_id]
   )).rows);
@@ -82,13 +88,25 @@ async function listSubmissions(req, res) {
 
 async function reviewSubmission(req, res) {
   const p = z.object({ final_score: z.number().min(0).max(100), feedback: z.string().optional() }).parse(req.body);
-  const q = await pool.query("UPDATE submissions SET final_score=$1, feedback=COALESCE($2,feedback), graded_by=$3 WHERE id=$4 AND status='needs_review' RETURNING *", [p.final_score, p.feedback || null, req.user.id, req.params.id]);
+  const q = await pool.query(
+    `UPDATE submissions SET final_score=$1, feedback=COALESCE($2,feedback), graded_by=$3
+      WHERE id=$4 AND status='needs_review'
+        AND sheet_id IN (SELECT sh.id FROM exam_sheets sh JOIN exams e ON e.id=sh.exam_id WHERE e.institution_id=$5)
+      RETURNING *`,
+    [p.final_score, p.feedback || null, req.user.id, req.params.id, tenantId(req)]
+  );
   if (!q.rowCount) return fail(res, 400, 'VALIDATION_ERROR', 'Sudah final atau tak ada.');
   ok(res, q.rows[0], 'Koreksi tersimpan, belum final.');
 }
 
 async function finalizeSubmission(req, res) {
-  const q = await pool.query("UPDATE submissions SET status='final', finalized_at=now() WHERE id=$1 AND status='needs_review' RETURNING *", [req.params.id]);
+  const q = await pool.query(
+    `UPDATE submissions SET status='final', finalized_at=now()
+      WHERE id=$1 AND status='needs_review'
+        AND sheet_id IN (SELECT sh.id FROM exam_sheets sh JOIN exams e ON e.id=sh.exam_id WHERE e.institution_id=$2)
+      RETURNING *`,
+    [req.params.id, tenantId(req)]
+  );
   if (!q.rowCount) return fail(res, 400, 'VALIDATION_ERROR', 'Sudah final atau tak ada.');
   await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [res.locals.requestId, req.user.id, req.user.institution_id, 'finalize', 'submissions', req.params.id, { final_score: q.rows[0].final_score }]);

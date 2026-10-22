@@ -84,13 +84,48 @@ async function createUser(req, res) {
   const p = z.object({ name: z.string().min(1), email: z.string().email(), password: z.string().min(6), role: z.enum(['admin', 'guru']) }).parse(req.body);
   const inst = needTenant(req, res, req.body.institution_id);
   if (!inst) return;
+  const email = p.email.toLowerCase();
+  const ada = await pool.query('SELECT id FROM users WHERE lower(email)=$1', [email]);
+  if (ada.rowCount) return fail(res, 400, 'VALIDATION_ERROR', 'Email itu sudah dipakai akun lain.');
   const hash = await bcrypt.hash(p.password, 10);
   const q = await pool.query(
     'INSERT INTO users(institution_id,name,email,password_hash,role) VALUES($1,$2,$3,$4,$5) RETURNING id,name,email,role,institution_id',
-    [inst, p.name, p.email, hash, p.role]
+    [inst, p.name, email, hash, p.role]
   );
   await audit(req, 'create', 'users', q.rows[0].id);
   ok(res, q.rows[0], 'Pengguna dibuat.');
+}
+
+// Admin boleh mengubah guru di sekolahnya; akun superadmin tak bisa disentuh, dan
+// admin tak boleh menonaktifkan/menurunkan dirinya sendiri supaya tak terkunci.
+async function updateUser(req, res) {
+  const p = z.object({ name: z.string().min(1), role: z.enum(['admin', 'guru']), is_active: z.boolean() }).parse(req.body);
+  const inst = needTenant(req, res, req.body.institution_id);
+  if (!inst) return;
+  if (Number(req.params.id) === req.user.id && (!p.is_active || p.role !== req.user.role)) {
+    return fail(res, 400, 'VALIDATION_ERROR', 'Akun Anda sendiri tidak bisa dinonaktifkan atau diturunkan perannya.');
+  }
+  const q = await pool.query(
+    "UPDATE users SET name=$1, role=$2, is_active=$3 WHERE id=$4 AND institution_id=$5 AND role <> 'superadmin' RETURNING id,name,email,role,is_active",
+    [p.name, p.role, p.is_active, req.params.id, inst]
+  );
+  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Pengguna tak ditemukan.');
+  await audit(req, 'update', 'users', Number(req.params.id));
+  ok(res, q.rows[0], 'Pengguna diubah.');
+}
+
+async function resetUserPassword(req, res) {
+  const p = z.object({ password: z.string() }).parse(req.body);
+  if (p.password.length < 6) return fail(res, 400, 'VALIDATION_ERROR', 'Kata sandi baru minimal 6 huruf.');
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const q = await pool.query(
+    "UPDATE users SET password_hash=$1 WHERE id=$2 AND institution_id=$3 AND role <> 'superadmin' RETURNING id",
+    [await bcrypt.hash(p.password, 10), req.params.id, inst]
+  );
+  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Pengguna tak ditemukan.');
+  await audit(req, 'update', 'users', Number(req.params.id));
+  ok(res, null, 'Kata sandi pengguna diganti. Berikan sandi baru itu kepadanya.');
 }
 
 // ---- KOP SURAT ----
@@ -126,6 +161,11 @@ async function updateLetterhead(req, res) {
 }
 
 // ---- KELAS ----
+// Kelas (dan siswanya) hanya boleh disentuh sekolah pemiliknya.
+async function kelasMilik(inst, classId) {
+  const r = await pool.query('SELECT id FROM classes WHERE id=$1 AND institution_id=$2', [classId, inst]);
+  return r.rowCount > 0;
+}
 async function listClasses(req, res) {
   const inst = needTenant(req, res, req.query.institution_id);
   if (!inst) return;
@@ -140,11 +180,16 @@ async function createClass(req, res) {
 }
 async function updateClass(req, res) {
   const p = z.object({ name: z.string().min(1), academic_year: z.string().min(4), jenjang: z.enum(['SD', 'SMP', 'SMA']), level: z.number().int().min(1).max(12) }).parse(req.body);
-  const q = await pool.query('UPDATE classes SET name=$1, academic_year=$2, jenjang=$3, level=$4 WHERE id=$5 RETURNING *', [p.name, p.academic_year, p.jenjang, p.level, req.params.id]);
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const q = await pool.query('UPDATE classes SET name=$1, academic_year=$2, jenjang=$3, level=$4 WHERE id=$5 AND institution_id=$6 RETURNING *', [p.name, p.academic_year, p.jenjang, p.level, req.params.id, inst]);
   if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
   ok(res, q.rows[0], 'Kelas diubah.');
 }
 async function deleteClass(req, res) {
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  if (!(await kelasMilik(inst, req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
   const isi = await pool.query('SELECT COUNT(*) AS n FROM students WHERE class_id=$1 AND is_active=true', [req.params.id]);
   if (Number(isi.rows[0].n) > 0) return fail(res, 400, 'VALIDATION_ERROR', 'Kelas masih berisi siswa, kosongkan dulu.');
   const q = await pool.query('DELETE FROM classes WHERE id=$1 RETURNING id', [req.params.id]);
@@ -156,21 +201,37 @@ async function deleteClass(req, res) {
 // ---- SISWA (+ impor JSON dari CSV yang diparsing di FE) ----
 async function listStudents(req, res) {
   if (!req.query.class_id) return fail(res, 400, 'VALIDATION_ERROR', 'class_id wajib.');
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  if (!(await kelasMilik(inst, req.query.class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
   ok(res, (await pool.query('SELECT * FROM students WHERE class_id=$1 AND is_active=true ORDER BY name', [req.query.class_id])).rows);
 }
 async function createStudent(req, res) {
   const p = z.object({ class_id: z.number().int(), name: z.string().min(1), nis: z.string().min(1) }).parse(req.body);
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  if (!(await kelasMilik(inst, p.class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
   const q = await pool.query('INSERT INTO students(class_id,name,nis) VALUES($1,$2,$3) RETURNING *', [p.class_id, p.name, p.nis]);
   ok(res, q.rows[0], 'Siswa ditambahkan.');
 }
 async function updateStudent(req, res) {
   const p = z.object({ name: z.string().min(1), nis: z.string().min(1) }).parse(req.body);
-  const q = await pool.query('UPDATE students SET name=$1, nis=$2 WHERE id=$3 AND is_active=true RETURNING *', [p.name, p.nis, req.params.id]);
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const q = await pool.query(
+    'UPDATE students SET name=$1, nis=$2 WHERE id=$3 AND is_active=true AND class_id IN (SELECT id FROM classes WHERE institution_id=$4) RETURNING *',
+    [p.name, p.nis, req.params.id, inst]
+  );
   if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Siswa tak ada.');
   ok(res, q.rows[0], 'Siswa diubah.');
 }
 async function deleteStudent(req, res) {
-  const q = await pool.query('UPDATE students SET is_active=false WHERE id=$1 AND is_active=true RETURNING id', [req.params.id]);
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const q = await pool.query(
+    'UPDATE students SET is_active=false WHERE id=$1 AND is_active=true AND class_id IN (SELECT id FROM classes WHERE institution_id=$2) RETURNING id',
+    [req.params.id, inst]
+  );
   if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Siswa tak ada.');
   await audit(req, 'delete', 'students', req.params.id);
   ok(res, null, 'Siswa dihapus. Nilai yang sudah ada tetap tersimpan.');
@@ -188,6 +249,9 @@ async function sisipkanSiswa(class_id, rows) {
 
 async function importStudents(req, res) {
   const p = z.object({ class_id: z.number().int(), rows: z.array(z.object({ name: z.string().min(1), nis: z.string().min(1) })).max(200) }).parse(req.body);
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  if (!(await kelasMilik(inst, p.class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
   const n = await sisipkanSiswa(p.class_id, p.rows);
   await audit(req, 'import', 'students', p.class_id, { count: n });
   ok(res, { imported: n }, `${n} siswa diimpor.`);
@@ -198,6 +262,9 @@ async function importStudentsFile(req, res) {
   const class_id = Number(req.body.class_id);
   if (!req.file) return fail(res, 400, 'VALIDATION_ERROR', 'Berkas .xlsx wajib.');
   if (!class_id) return fail(res, 400, 'VALIDATION_ERROR', 'Pilih kelasnya dulu.');
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  if (!(await kelasMilik(inst, class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   try { await wb.xlsx.load(req.file.buffer); } catch { return fail(res, 400, 'VALIDATION_ERROR', 'Berkas tidak bisa dibaca sebagai .xlsx.'); }
@@ -344,7 +411,7 @@ async function stats(req, res) {
 }
 
 module.exports = {
-  listInstitutions, createInstitution, updateInstitution, uploadLogos, listUsers, createUser,
+  listInstitutions, createInstitution, updateInstitution, uploadLogos, listUsers, createUser, updateUser, resetUserPassword,
   listLetterheads, createLetterhead, updateLetterhead, listClasses, createClass, updateClass, deleteClass,
   listStudents, createStudent, updateStudent, deleteStudent, importStudents, importStudentsFile,
   listSubjects, createSubject, updateSubject, deleteSubject, listTopics, createTopic, updateTopic, deleteTopic,

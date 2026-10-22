@@ -1,8 +1,10 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { z } = require('zod');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
+const { kirimEmail, appUrl } = require('../lib/mailer');
 
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
 
@@ -54,7 +56,7 @@ async function login(req, res, next) {
   try {
     const p = loginSchema.parse(req.body);
     if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
-    const r = await pool.query('SELECT * FROM users WHERE email=$1 AND is_active=true', [p.email]);
+    const r = await pool.query('SELECT * FROM users WHERE lower(email)=lower($1) AND is_active=true', [p.email]);
     const u = r.rows[0];
     if (!u || !(await bcrypt.compare(p.password, u.password_hash))) return fail(res, 401, 'UNAUTHORIZED', 'Email atau kata sandi salah.');
     await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity) VALUES($1,$2,$3,$4,$5)', [res.locals.requestId, u.id, u.institution_id, 'login', 'users']);
@@ -118,4 +120,78 @@ async function changePassword(req, res, next) {
   }
 }
 
-module.exports = { throttle, institutionsPublic, register, login, me, updateProfile, changePassword };
+// ---- LUPA KATA SANDI ----
+// Jawaban selalu sama supaya tak bisa dipakai menebak email mana yang terdaftar.
+const PESAN_TERKIRIM = 'Kalau email itu terdaftar, tautan atur ulang sudah dikirim. Cek juga folder spam.';
+// Batas per alamat email (bukan per IP: satu sekolah biasanya berbagi satu IP).
+// shortcut: penanda di memori, hilang saat server restart; pindah ke tabel bila perlu tahan lama.
+const batasReset = new Map();
+function lewatBatasReset(email) {
+  const kini = Date.now();
+  const riw = (batasReset.get(email) || []).filter((t) => kini - t < 15 * 60 * 1000);
+  riw.push(kini);
+  batasReset.set(email, riw);
+  return riw.length > 3;
+}
+
+const hashToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
+const escHtml = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function forgotPassword(req, res, next) {
+  try {
+    const p = z.object({ email: z.string().trim().toLowerCase().email('Email belum benar.') }).parse(req.body);
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    if (lewatBatasReset(p.email)) return fail(res, 429, 'QUOTA_EXCEEDED', 'Terlalu banyak permintaan. Tunggu 15 menit lalu coba lagi.');
+
+    const u = (await pool.query('SELECT id, name, email FROM users WHERE lower(email)=$1 AND is_active=true', [p.email])).rows[0];
+    if (!u) return ok(res, null, PESAN_TERKIRIM);
+
+    const token = crypto.randomBytes(32).toString('hex');
+    await pool.query("DELETE FROM password_resets WHERE expires_at < now() OR used_at IS NOT NULL");
+    await pool.query("INSERT INTO password_resets(user_id, token_hash, expires_at) VALUES($1,$2, now() + interval '60 minutes')", [u.id, hashToken(token)]);
+
+    const link = `${appUrl()}/reset-sandi?token=${token}`;
+    try {
+      await kirimEmail({
+        to: u.email,
+        subject: 'Atur ulang kata sandi Sigeso',
+        text: `Halo ${u.name},\n\nKami menerima permintaan mengatur ulang kata sandi akun Sigeso Anda.\nBuka tautan ini untuk membuat kata sandi baru:\n\n${link}\n\nTautan berlaku 60 menit dan hanya bisa dipakai sekali. Kalau Anda tidak meminta ini, abaikan email ini.\n\n— Sigeso`,
+        html: `<p>Halo ${escHtml(u.name)},</p><p>Kami menerima permintaan mengatur ulang kata sandi akun Sigeso Anda.</p><p><a href="${link}">Buat kata sandi baru</a></p><p>Tautan berlaku 60 menit dan hanya bisa dipakai sekali. Kalau Anda tidak meminta ini, abaikan email ini.</p><p>— Sigeso</p>`,
+      });
+    } catch (e) {
+      // Token yang tak sempat terkirim jangan tertinggal bisa dipakai.
+      await pool.query('DELETE FROM password_resets WHERE token_hash=$1', [hashToken(token)]);
+      throw e;
+    }
+    return ok(res, null, PESAN_TERKIRIM);
+  } catch (e) {
+    return next(e.code ? e : Object.assign(e, { code: 'VALIDATION_ERROR', httpStatus: 400 }));
+  }
+}
+
+async function resetPassword(req, res, next) {
+  try {
+    const p = z.object({ token: z.string(), baru: z.string() }).parse(req.body);
+    if (p.baru.length < 6) return fail(res, 400, 'VALIDATION_ERROR', 'Kata sandi baru minimal 6 huruf.');
+    if (p.token.length < 20) return fail(res, 400, 'VALIDATION_ERROR', 'Tautan tidak valid. Minta tautan baru dari halaman lupa sandi.');
+    if (!pool) return fail(res, 500, 'DB_ERROR', 'Database belum dikonfigurasi.');
+    const q = await pool.query(
+      "UPDATE password_resets SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at > now() RETURNING user_id",
+      [hashToken(p.token)]
+    );
+    if (!q.rowCount) return fail(res, 400, 'VALIDATION_ERROR', 'Tautan sudah kedaluwarsa atau pernah dipakai. Minta tautan baru.');
+    const uid = q.rows[0].user_id;
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [await bcrypt.hash(p.baru, 10), uid]);
+    await pool.query('DELETE FROM password_resets WHERE user_id=$1 AND used_at IS NULL', [uid]);
+    const u = (await pool.query('SELECT institution_id FROM users WHERE id=$1', [uid])).rows[0];
+    await pool.query(
+      'INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id) VALUES($1,$2,$3,$4,$5,$6)',
+      [res.locals.requestId, uid, u?.institution_id || null, 'reset_password', 'users', uid]
+    );
+    return ok(res, null, 'Kata sandi sudah diganti. Silakan masuk.');
+  } catch (e) {
+    return next(e.code ? e : Object.assign(e, { code: 'VALIDATION_ERROR', httpStatus: 400 }));
+  }
+}
+
+module.exports = { throttle, institutionsPublic, register, login, me, updateProfile, changePassword, forgotPassword, resetPassword };

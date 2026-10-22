@@ -79,3 +79,13 @@ DELETE FROM classes WHERE jenjang IS NULL;
 ALTER TABLE institutions ADD COLUMN IF NOT EXISTS logo_left_path TEXT;
 -- Jenis ujian yang tercetak sebagai judul (mis. "Ulangan Harian", "USP").
 ALTER TABLE exams ADD COLUMN IF NOT EXISTS exam_type TEXT NOT NULL DEFAULT 'Ulangan Harian';
+-- Reset kata sandi lewat email: yang disimpan hanya hash token, sekali pakai.
+CREATE TABLE IF NOT EXISTS password_resets(
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reset_user ON password_resets(user_id);

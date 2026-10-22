@@ -10,5 +10,7 @@ router.post('/login', c.login);
 router.get('/me', asyncH(c.me));
 router.put('/profile', auth, asyncH(c.updateProfile));
 router.put('/password', auth, asyncH(c.changePassword));
+router.post('/forgot', asyncH(c.forgotPassword));
+router.post('/reset', asyncH(c.resetPassword));
 
 module.exports = router;

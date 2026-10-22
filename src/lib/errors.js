@@ -17,6 +17,9 @@ const CODES = {
   PAGES_INCOMPLETE: 400,
   PANDOC_FAILED: 500,
   EXPORT_FAILED: 500,
+  // SMTP belum diisi di .env, atau pengirimannya ditolak penyedia.
+  MAIL_NOT_CONFIGURED: 500,
+  MAIL_FAILED: 502,
   DB_ERROR: 500,
 };
 

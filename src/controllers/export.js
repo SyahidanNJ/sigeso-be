@@ -6,13 +6,14 @@ const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
 const { AppError } = require('../lib/errors');
 const { catatBerkas } = require('../lib/berkas');
+const { tenantId } = require('../lib/scope');
 const { esc, kopTypst, judulTypst, soalTypst, copyLogos } = require('../services/print/layout');
 
 const DIR = path.join(__dirname, '..', '..', 'uploads', 'export');
 fs.mkdirSync(DIR, { recursive: true });
 
-async function dataNilai(examId) {
-  const exam = (await pool.query('SELECT e.*, c.name AS kelas FROM exams e JOIN classes c ON c.id=e.class_id WHERE e.id=$1', [examId])).rows[0];
+async function dataNilai(examId, instId) {
+  const exam = (await pool.query('SELECT e.*, c.name AS kelas FROM exams e JOIN classes c ON c.id=e.class_id WHERE e.id=$1 AND e.institution_id=$2', [examId, instId])).rows[0];
   if (!exam) throw new AppError('NOT_FOUND', 'Ujian tak ada.');
   const rows = (await pool.query(
     'SELECT st.name, st.nis, s.pg_score, s.final_score, s.status, s.feedback FROM submissions s JOIN exam_sheets sh ON sh.id=s.sheet_id JOIN students st ON st.id=sh.student_id WHERE sh.exam_id=$1 ORDER BY st.name', [examId]
@@ -23,7 +24,7 @@ async function dataNilai(examId) {
 
 async function exportNilai(req, res) {
   const format = req.query.format || 'xlsx';
-  const { exam, rows, kop } = await dataNilai(req.params.id);
+  const { exam, rows, kop } = await dataNilai(req.params.id, tenantId(req));
   const stamp = Date.now();
   let rel;
 
@@ -63,8 +64,8 @@ async function exportNilai(req, res) {
   ok(res, { download: `/api/v1/downloads/${rel}` }, 'Ekspor siap diunduh.');
 }
 
-async function dataSoal(examId) {
-  const exam = (await pool.query('SELECT e.*, c.name AS kelas, c.academic_year, s.name AS mapel FROM exams e JOIN classes c ON c.id=e.class_id LEFT JOIN subjects s ON s.id=e.subject_id WHERE e.id=$1', [examId])).rows[0];
+async function dataSoal(examId, instId) {
+  const exam = (await pool.query('SELECT e.*, c.name AS kelas, c.academic_year, s.name AS mapel FROM exams e JOIN classes c ON c.id=e.class_id LEFT JOIN subjects s ON s.id=e.subject_id WHERE e.id=$1 AND e.institution_id=$2', [examId, instId])).rows[0];
   if (!exam) throw new AppError('NOT_FOUND', 'Ujian tak ada.');
   const items = (await pool.query('SELECT q.*, eq.nomor FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [examId])).rows;
   if (!items.length) throw new AppError('VALIDATION_ERROR', 'Ujian belum punya soal.');
@@ -95,7 +96,7 @@ async function exportDokumen(req, res) {
   const format = req.query.format || 'pdf';
   const isi = ['soal', 'kunci'].includes(req.query.isi) ? req.query.isi : 'semua';
   const nama = isi === 'semua' ? 'dokumen' : isi;
-  const { exam, items, kop, inst } = await dataSoal(req.params.id);
+  const { exam, items, kop, inst } = await dataSoal(req.params.id, tenantId(req));
   const stamp = Date.now();
   const jobDir = path.join(DIR, `dokumen-${exam.id}-${stamp}`);
   fs.mkdirSync(jobDir, { recursive: true });

@@ -2,7 +2,7 @@ const fs = require('fs');
 const { z } = require('zod');
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
-const { needTenant } = require('../lib/scope');
+const { needTenant, tenantId, ujianMilik } = require('../lib/scope');
 const { audit } = require('./bantuan');
 const { AppError } = require('../lib/errors');
 const { relDiUploads, hapusBerkasRel } = require('../lib/berkas');
@@ -182,6 +182,7 @@ async function updateExam(req, res) {
 async function deleteExam(req, res) {
   const inst = needTenant(req, res);
   if (!inst) return;
+  if (!(await ujianMilik(inst, req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
   const n = (await pool.query(
     `SELECT (SELECT COUNT(*)::int FROM submissions s JOIN exam_sheets sh ON sh.id=s.sheet_id WHERE sh.exam_id=$1) AS nilai`,
     [req.params.id]
@@ -205,10 +206,12 @@ async function deleteExam(req, res) {
   ok(res, { id: r.rows[0].id }, n ? `Ujian dan ${n} nilainya dihapus.` : 'Ujian dihapus.');
 }
 async function listExamItems(req, res) {
+  if (!(await ujianMilik(tenantId(req), req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
   ok(res, (await pool.query('SELECT q.*, eq.nomor, COALESCE(eq.weight_override,q.weight) AS bobot FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [req.params.id])).rows);
 }
 async function setExamItems(req, res) {
   const p = z.object({ question_ids: z.array(z.number().int()).max(100) }).parse(req.body);
+  if (!(await ujianMilik(tenantId(req), req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
   await pool.query('DELETE FROM exam_questions WHERE exam_id=$1', [req.params.id]);
   let no = 1;
   for (const qid of p.question_ids) {

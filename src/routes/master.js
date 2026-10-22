@@ -36,6 +36,8 @@ r.post('/institutions/logos', roles('superadmin', 'admin', 'guru'),
 
 r.get('/users', roles('superadmin', 'admin'), asyncH(c.listUsers));
 r.post('/users', roles('superadmin', 'admin'), asyncH(c.createUser));
+r.put('/users/:id', roles('superadmin', 'admin'), asyncH(c.updateUser));
+r.put('/users/:id/password', roles('superadmin', 'admin'), asyncH(c.resetUserPassword));
 
 r.get('/letterheads', asyncH(c.listLetterheads));
 r.post('/letterheads', roles('superadmin', 'admin'), asyncH(c.createLetterhead));

@@ -42,19 +42,47 @@ function copyLogos(jobDir, inst) {
   return hasil;
 }
 
+// Madrasah (Kemenag) vs sekolah dinas. \b mencegah "SMA"/"MALANG" dianggap "MA".
+const MADRASAH = /\b(?:RA|BA|MI|MIS|MIN|MTS|MTSN|MTSS|MA|MAS|MAN|MAK|MAKN)\b|RAUDHATUL ATHFAL|BUSTANUL ATHFAL|MADRASAH (?:IBTIDAIYAH|TSANAWIYAH|ALIYAH)/i;
+
+function wilayah(alamat) {
+  const s = String(alamat || '');
+  const kab = /\bKab(?:upaten)?\.?\s+([^,]+)/i.exec(s);
+  if (kab) return `KABUPATEN ${kab[1].trim().toUpperCase()}`;
+  const kota = /\bKota\s+([^,]+)/i.exec(s);
+  return kota ? `KOTA ${kota[1].trim().toUpperCase()}` : '';
+}
+
+// Kop otomatis: dua baris instansi di atas nama sekolah.
+function kopOtomatis(inst) {
+  const w = wilayah(inst?.address);
+  if (MADRASAH.test(String(inst?.name || ''))) {
+    return ['KEMENTERIAN AGAMA REPUBLIK INDONESIA', w ? `KANTOR KEMENTERIAN AGAMA ${w}` : ''].filter(Boolean);
+  }
+  return w ? [`PEMERINTAH ${w}`, 'DINAS PENDIDIKAN'] : [];
+}
+
 function kopTypst({ kop, inst, logos = {} }) {
-  const pemerintah = String(kop?.header_markdown || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  const nama = String(inst?.name || '').trim();
+  const alamat = String(inst?.address || '').trim();
+  const manual = String(kop?.header_markdown || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  // Kop manual dipakai bila diisi; baris yang menduplikasi nama/alamat dibuang
+  // karena keduanya sudah dicetak di bawahnya.
+  const pemerintah = (manual.length ? manual : kopOtomatis(inst))
+    .filter((s) => s.toLowerCase() !== nama.toLowerCase() && s.toLowerCase() !== alamat.toLowerCase());
   const bagian = [
-    pemerintah.length ? pemerintah.map((l) => `#text(size: 10pt)[${esc(l)}]`).join(' \\\n') : '',
+    pemerintah.length
+      ? `#block[#set par(leading: 0.45em)\n${pemerintah.map((l) => `#text(size: 10pt, weight: "bold")[${esc(l)}]`).join(' \\\n')}]`
+      : '',
     pemerintah.length ? '#v(3pt)' : '',
-    `#text(size: 14pt, weight: "bold")[${esc(String(inst?.name || '').toUpperCase())}]`,
-    ...(inst?.address ? ['#v(1pt)', `#text(size: 9pt)[${esc(inst.address)}]`] : []),
+    `#text(size: 14pt, weight: "bold")[${esc(nama.toUpperCase())}]`,
+    ...(alamat ? ['#v(1pt)', `#text(size: 9pt)[${esc(alamat)}]`] : []),
   ].filter(Boolean);
 
   // Tinggi sama untuk kedua logo; lebar mengikuti rasio asli agar tak gepeng.
-  const gambar = (f) => (f ? `#image("${f}", width: 2cm, height: 1.8cm, fit: "contain")` : '');
+  const gambar = (f) => (f ? `#image("${f}", width: 2.6cm, height: 2.3cm, fit: "contain")` : '');
   return `#grid(
-  columns: (2.2cm, 1fr, 2.2cm),
+  columns: (2.8cm, 1fr, 2.8cm),
   align: (center + horizon, center + top, center + horizon),
   [${gambar(logos.kiri)}],
   [#set align(center)
@@ -80,19 +108,21 @@ function judulTypst(exam) {
 }
 
 function metaTypst(exam) {
-  const titik = '#line(length: 100%, stroke: (paint: black, thickness: 0.5pt, dash: "dotted"))';
+  // Garis isian memakai garis bawah sel, bukan #line di dalam sel: #line tak
+  // punya tinggi sehingga menempel di atas teks.
+  const isian = 'table.cell(stroke: (bottom: (paint: black, thickness: 0.5pt, dash: "dotted")))[]';
   const baris = [
-    ['Mata Pelajaran', esc(exam.mapel || '-')],
-    ['Hari/tanggal', titik],
-    ['Kelas', esc(kelasCetak(exam.kelas))],
-    ['Waktu', titik],
+    ['Mata Pelajaran', `[${esc(exam.mapel || '-')}]`],
+    ['Hari/tanggal', isian],
+    ['Kelas', `[${esc(kelasCetak(exam.kelas))}]`],
+    ['Waktu', isian],
   ];
   return `#v(6pt)
 #table(
   columns: (3.2cm, 0.3cm, 1fr),
   stroke: none,
-  inset: (x: 0pt, y: 3pt),
-${baris.map(([a, b]) => `  [${a}], [:], [${b}],`).join('\n')}
+  inset: (x: 0pt, y: 2pt),
+${baris.map(([a, b]) => `  [${a}], [:], ${b},`).join('\n')}
 )
 `;
 }
@@ -156,7 +186,61 @@ ${soalItem(q)}]
 }
 
 function lembarJawabanTypst({ student, exam, qr, items }) {
-  const baris = items.map((q) => `[${q.nomor}], [#box(stroke: 0.5pt, width: 4cm, inset: 4pt)[ ]], []`).join(',\n');
+  const perJenis = (t) => items.filter((q) => q.qtype === t);
+  const judul = (t) => `#v(10pt)\n#text(size: 11pt, weight: "bold")[${JENIS[t].huruf}. ${JENIS[t].label}]\n#v(4pt)\n`;
+  let isi = '';
+
+  // PG: tiga pasang nomor-jawaban per baris supaya ringkas saat dikoreksi.
+  const pg = perJenis('PG');
+  if (pg.length) {
+    const tinggi = Math.ceil(pg.length / 3);
+    const kolom = Math.ceil(pg.length / tinggi);
+    const baris = [];
+    for (let r = 0; r < tinggi; r++) {
+      const sel = [];
+      for (let c = 0; c < kolom; c++) {
+        const q = pg[c * tinggi + r];
+        sel.push(q ? `[${q.nomor}], []` : '[], []');
+      }
+      baris.push(`  ${sel.join(', ')},`);
+    }
+    const kolomTypst = Array.from({ length: kolom }, () => '1.2cm, 1fr').join(', ');
+    const kepala = Array.from({ length: kolom }, () => '[*No*], [*Jawaban*]').join(', ');
+    isi += `${judul('PG')}#table(
+  columns: (${kolomTypst}),
+  inset: (x: 4pt, y: 5pt),
+  ${kepala},
+${baris.join('\n')}
+)
+`;
+  }
+
+  const isian = perJenis('ISIAN');
+  if (isian.length) {
+    isi += `${judul('ISIAN')}#table(
+  columns: (1.2cm, 1fr),
+  inset: (x: 4pt, y: 6pt),
+  [*No*], [*Jawaban*],
+${isian.map((q) => `  [${q.nomor}], [],`).join('\n')}
+)
+`;
+  }
+
+  // Uraian: empat baris tulis per soal, satu blok tidak boleh terbelah halaman.
+  const uraian = perJenis('URAIAN');
+  if (uraian.length) {
+    const baris = uraian.map((q) => `#block(breakable: false, inset: (bottom: 22pt))[
+#grid(columns: (0.8cm, 1fr),
+  [#v(2pt)${q.nomor}.],
+  [#v(9pt)#line(length: 100%, stroke: 0.5pt)
+#v(20pt)#line(length: 100%, stroke: 0.5pt)
+#v(20pt)#line(length: 100%, stroke: 0.5pt)
+#v(20pt)#line(length: 100%, stroke: 0.5pt)])
+]`).join('\n');
+    isi += `${judul('URAIAN')}${baris}
+`;
+  }
+
   return `#pagebreak()
 #align(center)[#text(size: 13pt, weight: "bold")[LEMBAR JAWABAN]]
 #v(4pt)
@@ -171,14 +255,7 @@ function lembarJawabanTypst({ student, exam, qr, items }) {
   ],
   [#image("${qr}", width: 1.8cm)],
 )
-#v(6pt)
-#table(
-  columns: (1.4cm, 5cm, 1fr),
-  inset: 5pt,
-  [*No*], [*Jawaban*], [*Nilai*],
-${baris}
-)
-`;
+${isi}`;
 }
 
-module.exports = { esc, JENIS, copyLogos, kopTypst, judulTypst, metaTypst, identitasTypst, soalTypst, lembarJawabanTypst };
+module.exports = { esc, JENIS, copyLogos, kopOtomatis, kopTypst, judulTypst, metaTypst, identitasTypst, soalTypst, lembarJawabanTypst };

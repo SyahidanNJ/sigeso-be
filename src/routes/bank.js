@@ -18,6 +18,8 @@ r.post('/exams', roles(...GURU), asyncH(c.createExam));
 r.put('/exams/:id', roles(...GURU), asyncH(c.updateExam));
 r.delete('/exams/:id', roles(...GURU), asyncH(c.deleteExam));
 r.get('/exams/:id/items', asyncH(c.listExamItems));
+r.put('/exams/:id/items/:questionId', roles(...GURU), asyncH(c.updateExamItem));
+r.delete('/exams/:id/items/:questionId', roles(...GURU), asyncH(c.deleteExamItem));
 r.put('/exams/:id/items', roles(...GURU), asyncH(c.setExamItems));
 
 r.get('/llm-usage', roles('superadmin', 'admin'), asyncH(c.llmUsage));

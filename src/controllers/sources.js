@@ -62,7 +62,7 @@ async function robotsAllowed(url) {
   }
 }
 
-// shortcut: ekstraksi sinkron (file kecil). Upgrade ke pg-boss bila file besar/menumpuk.
+// shortcut: ekstraksi sinkron (file kecil). Upgrade ke antrean latar bila file besar/menumpuk.
 async function uploadSource(req, res) {
   const sub = Number(req.body.sub_chapter_id) || null;
   const inst = needTenant(req, res, req.body.institution_id);

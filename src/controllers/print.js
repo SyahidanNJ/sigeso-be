@@ -1,28 +1,27 @@
 const { pool } = require('../db/pool');
 const { ok, fail } = require('../lib/respond');
 const { catatBerkas } = require('../lib/berkas');
-const { tenantId, ujianMilik, lembarMilik } = require('../lib/scope');
-const { printExam, reprintSheet: renderUlang } = require('../services/print');
+const { tenantId, ujianMilik } = require('../lib/scope');
+const { printExam, printAnswerKey } = require('../services/print');
 
 async function printUjian(req, res) {
   if (!(await ujianMilik(tenantId(req), req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
   const out = await printExam(req.params.id);
-  await catatBerkas({ institution_id: req.user.institution_id, exam_id: Number(req.params.id), kind: 'cetak', rel: `print/${out.file}` });
+  const inst = tenantId(req);
+  await catatBerkas({ institution_id: inst, exam_id: Number(req.params.id), kind: 'cetak', rel: `print/${out.file}` });
   await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
-    [res.locals.requestId, req.user.id, req.user.institution_id, 'print', 'exams', req.params.id, out]);
-  ok(res, { download: `/api/v1/downloads/${out.file}`, ...out }, `${out.sheets} lembar dicetak.`);
+    [res.locals.requestId, req.user.id, inst, 'print', 'exams', req.params.id, { count: out.count }]);
+  ok(res, { download: `/api/v1/downloads/${out.file}`, ...out }, `${out.count} soal siap dicetak.`);
 }
 
-async function listSheets(req, res) {
+async function kunciJawaban(req, res) {
   if (!(await ujianMilik(tenantId(req), req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Ujian tak ditemukan.');
-  ok(res, (await pool.query('SELECT sh.*, st.name, st.nis FROM exam_sheets sh JOIN students st ON st.id=sh.student_id WHERE sh.exam_id=$1 ORDER BY st.name', [req.params.id])).rows);
+  const out = await printAnswerKey(req.params.id);
+  const inst = tenantId(req);
+  await catatBerkas({ institution_id: inst, exam_id: Number(req.params.id), kind: 'kunci', rel: `print/${out.file}` });
+  await pool.query('INSERT INTO audit_logs(request_id,user_id,institution_id,action,entity,entity_id,meta) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [res.locals.requestId, req.user.id, inst, 'print-kunci', 'exams', req.params.id, { count: out.count }]);
+  ok(res, { download: `/api/v1/downloads/${out.file}`, ...out }, 'Kunci jawaban siap diunduh.');
 }
 
-async function reprintSheet(req, res) {
-  if (!(await lembarMilik(tenantId(req), req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Lembar tak ditemukan.');
-  const out = await renderUlang(req.params.id);
-  await catatBerkas({ institution_id: out.institution_id, exam_id: out.exam_id, kind: 'cetak-ulang', rel: `print/${out.rel}` });
-  ok(res, { download: `/api/v1/downloads/${out.rel}` }, 'Lembar ulang dicetak.');
-}
-
-module.exports = { printUjian, listSheets, reprintSheet };
+module.exports = { printUjian, kunciJawaban };

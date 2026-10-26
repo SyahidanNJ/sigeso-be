@@ -40,9 +40,6 @@ function ukuran(n) {
   };
 
   (await pool.query('SELECT file_path, extracted_path FROM sources')).rows.forEach((s) => { tambah(s.file_path); tambah(s.extracted_path); });
-  (await pool.query('SELECT file_path FROM submission_images')).rows.forEach((s) => tambah(s.file_path));
-  // pdf_path menyimpan folder job cetak, jadi seluruh isinya dianggap terpakai.
-  (await pool.query('SELECT pdf_path FROM exam_sheets WHERE pdf_path IS NOT NULL')).rows.forEach((s) => tambah(s.pdf_path));
   (await pool.query('SELECT rel_path FROM generated_files')).rows.forEach((s) => tambah(path.join(UPLOAD, s.rel_path)));
   (await pool.query('SELECT logo_path, logo_left_path FROM institutions')).rows.forEach((s) => {
     if (s.logo_path) tambah(path.resolve(UPLOAD, s.logo_path));

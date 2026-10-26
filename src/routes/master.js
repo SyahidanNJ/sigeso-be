@@ -9,15 +9,6 @@ const c = require('../controllers/master');
 const r = express.Router();
 r.use(auth);
 
-const uploadXlsx = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, f, cb) => {
-    const okExt = path.extname(f.originalname).toLowerCase() === '.xlsx';
-    cb(okExt ? null : new AppError('VALIDATION_ERROR', 'Hanya berkas .xlsx.'), okExt);
-  },
-});
-
 // Logo hanya PNG/JPG: SVG bisa membawa skrip dan disajikan dari origin yang sama.
 const uploadLogo = multer({
   storage: multer.memoryStorage(),
@@ -46,14 +37,7 @@ r.put('/letterheads/me', roles('superadmin', 'admin', 'guru'), asyncH(c.updateLe
 r.get('/classes', asyncH(c.listClasses));
 r.post('/classes', roles('superadmin', 'admin', 'guru'), asyncH(c.createClass));
 r.put('/classes/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.updateClass));
-r.delete('/classes/:id', roles('superadmin', 'admin'), asyncH(c.deleteClass));
-
-r.get('/students', asyncH(c.listStudents));
-r.post('/students', roles('superadmin', 'admin', 'guru'), asyncH(c.createStudent));
-r.put('/students/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.updateStudent));
-r.delete('/students/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.deleteStudent));
-r.post('/students/import', roles('superadmin', 'admin', 'guru'), asyncH(c.importStudents));
-r.post('/students/import-file', roles('superadmin', 'admin', 'guru'), uploadXlsx.single('file'), asyncH(c.importStudentsFile));
+r.delete('/classes/:id', roles('superadmin', 'admin', 'guru'), asyncH(c.deleteClass));
 
 r.get('/subjects', asyncH(c.listSubjects));
 r.post('/subjects', roles('superadmin', 'admin', 'guru'), asyncH(c.createSubject));

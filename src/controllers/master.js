@@ -192,128 +192,88 @@ async function deleteClass(req, res) {
   if (!(await kelasMilik(inst, req.params.id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
   const isi = await pool.query('SELECT COUNT(*) AS n FROM students WHERE class_id=$1 AND is_active=true', [req.params.id]);
   if (Number(isi.rows[0].n) > 0) return fail(res, 400, 'VALIDATION_ERROR', 'Kelas masih berisi siswa, kosongkan dulu.');
-  const q = await pool.query('DELETE FROM classes WHERE id=$1 RETURNING id', [req.params.id]);
-  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
-  await audit(req, 'delete', 'classes', req.params.id);
-  ok(res, null, 'Kelas dihapus.');
-}
-
-// ---- SISWA (+ impor JSON dari CSV yang diparsing di FE) ----
-async function listStudents(req, res) {
-  if (!req.query.class_id) return fail(res, 400, 'VALIDATION_ERROR', 'class_id wajib.');
-  const inst = needTenant(req, res);
-  if (!inst) return;
-  if (!(await kelasMilik(inst, req.query.class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
-  ok(res, (await pool.query('SELECT * FROM students WHERE class_id=$1 AND is_active=true ORDER BY name', [req.query.class_id])).rows);
-}
-async function createStudent(req, res) {
-  const p = z.object({ class_id: z.number().int(), name: z.string().min(1), nis: z.string().min(1) }).parse(req.body);
-  const inst = needTenant(req, res);
-  if (!inst) return;
-  if (!(await kelasMilik(inst, p.class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
-  const q = await pool.query('INSERT INTO students(class_id,name,nis) VALUES($1,$2,$3) RETURNING *', [p.class_id, p.name, p.nis]);
-  ok(res, q.rows[0], 'Siswa ditambahkan.');
-}
-async function updateStudent(req, res) {
-  const p = z.object({ name: z.string().min(1), nis: z.string().min(1) }).parse(req.body);
-  const inst = needTenant(req, res);
-  if (!inst) return;
-  const q = await pool.query(
-    'UPDATE students SET name=$1, nis=$2 WHERE id=$3 AND is_active=true AND class_id IN (SELECT id FROM classes WHERE institution_id=$4) RETURNING *',
-    [p.name, p.nis, req.params.id, inst]
-  );
-  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Siswa tak ada.');
-  ok(res, q.rows[0], 'Siswa diubah.');
-}
-async function deleteStudent(req, res) {
-  const inst = needTenant(req, res);
-  if (!inst) return;
-  const q = await pool.query(
-    'UPDATE students SET is_active=false WHERE id=$1 AND is_active=true AND class_id IN (SELECT id FROM classes WHERE institution_id=$2) RETURNING id',
-    [req.params.id, inst]
-  );
-  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Siswa tak ada.');
-  await audit(req, 'delete', 'students', req.params.id);
-  ok(res, null, 'Siswa dihapus. Nilai yang sudah ada tetap tersimpan.');
-}
-// Dipakai dua jalur: tempel data dan unggah .xlsx. NIS sama di kelas yang sama
-// hanya diperbarui namanya, jadi impor aman diulang.
-async function sisipkanSiswa(class_id, rows) {
-  let n = 0;
-  for (const s of rows) {
-    await pool.query('INSERT INTO students(class_id,name,nis) VALUES($1,$2,$3) ON CONFLICT(class_id,nis) DO UPDATE SET name=EXCLUDED.name,is_active=true', [class_id, s.name, s.nis]);
-    n++;
+  try {
+    const q = await pool.query('DELETE FROM classes WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ada.');
+    await audit(req, 'delete', 'classes', req.params.id);
+    ok(res, null, 'Kelas dihapus.');
+  } catch (e) {
+    // Ujian dan profil guru menahan kelas lewat foreign key.
+    if (e.code === '23503') return fail(res, 400, 'VALIDATION_ERROR', 'Kelas ini masih dipakai ujian atau profil guru. Pindahkan dulu pemakainya.');
+    throw e;
   }
-  return n;
-}
-
-async function importStudents(req, res) {
-  const p = z.object({ class_id: z.number().int(), rows: z.array(z.object({ name: z.string().min(1), nis: z.string().min(1) })).max(200) }).parse(req.body);
-  const inst = needTenant(req, res);
-  if (!inst) return;
-  if (!(await kelasMilik(inst, p.class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
-  const n = await sisipkanSiswa(p.class_id, p.rows);
-  await audit(req, 'import', 'students', p.class_id, { count: n });
-  ok(res, { imported: n }, `${n} siswa diimpor.`);
-}
-
-// Kolom dicari dari judulnya (Nama/NIS); kalau tak ada judul, anggap A=nama, B=NIS.
-async function importStudentsFile(req, res) {
-  const class_id = Number(req.body.class_id);
-  if (!req.file) return fail(res, 400, 'VALIDATION_ERROR', 'Berkas .xlsx wajib.');
-  if (!class_id) return fail(res, 400, 'VALIDATION_ERROR', 'Pilih kelasnya dulu.');
-  const inst = needTenant(req, res);
-  if (!inst) return;
-  if (!(await kelasMilik(inst, class_id))) return fail(res, 404, 'NOT_FOUND', 'Kelas tak ditemukan.');
-  const ExcelJS = require('exceljs');
-  const wb = new ExcelJS.Workbook();
-  try { await wb.xlsx.load(req.file.buffer); } catch { return fail(res, 400, 'VALIDATION_ERROR', 'Berkas tidak bisa dibaca sebagai .xlsx.'); }
-  const ws = wb.worksheets[0];
-  if (!ws) return fail(res, 400, 'VALIDATION_ERROR', 'Berkas tidak punya lembar kerja.');
-  const kepala = (ws.getRow(1).values || []).slice(1).map((v) => String(v ?? '').trim().toLowerCase());
-  let iNama = kepala.findIndex((h) => h.includes('nama'));
-  let iNis = kepala.findIndex((h) => h.includes('nis'));
-  let mulai = 2;
-  if (iNama < 0 || iNis < 0) { iNama = 0; iNis = 1; mulai = 1; }
-  const rows = [];
-  for (let r = mulai; r <= ws.rowCount; r++) {
-    const row = ws.getRow(r);
-    const name = String(row.getCell(iNama + 1).text || '').trim();
-    const nis = String(row.getCell(iNis + 1).text || '').trim();
-    if (!name && !nis) continue;
-    if (!name || !nis) return fail(res, 400, 'VALIDATION_ERROR', `Baris ${r}: nama dan NIS harus terisi dua-duanya.`);
-    rows.push({ name, nis });
-  }
-  if (!rows.length) return fail(res, 400, 'VALIDATION_ERROR', 'Tidak ada baris yang bisa diimpor.');
-  if (rows.length > 200) return fail(res, 400, 'VALIDATION_ERROR', `Ada ${rows.length} baris; maksimal 200 sekali impor.`);
-  const n = await sisipkanSiswa(class_id, rows);
-  await audit(req, 'import', 'students', class_id, { count: n, berkas: req.file.originalname });
-  ok(res, { imported: n }, `${n} siswa diimpor.`);
 }
 
 // ---- MATERI: Mapel > Topik > Bab > Subbab ----
+// Mapel milik sekolah + tingkat, jadi Matematika kelas 4 dan kelas 5 adalah dua
+// baris. Nama dicocokkan tanpa peduli besar/kecil huruf dan spasinya dirapikan.
+const rapiNama = (s) => s.trim().replace(/\s+/g, ' ');
+
 async function listSubjects(req, res) {
   const inst = needTenant(req, res, req.query.institution_id);
   if (!inst) return;
-  ok(res, (await pool.query('SELECT * FROM subjects WHERE institution_id=$1 ORDER BY name', [inst])).rows);
+  const g = req.query.grade_level ? Number(req.query.grade_level) : null;
+  const q = g
+    ? await pool.query('SELECT * FROM subjects WHERE institution_id=$1 AND grade_level=$2 ORDER BY name', [inst, g])
+    : await pool.query('SELECT * FROM subjects WHERE institution_id=$1 ORDER BY grade_level NULLS LAST, name', [inst]);
+  ok(res, q.rows);
 }
 async function createSubject(req, res) {
-  const p = z.object({ name: z.string().min(1) }).parse(req.body);
+  const p = z.object({ name: z.string().min(1), grade_level: z.number().int().min(1).max(12) }).parse(req.body);
   const inst = needTenant(req, res, req.body.institution_id);
   if (!inst) return;
-  ok(res, (await pool.query('INSERT INTO subjects(institution_id,name) VALUES($1,$2) RETURNING *', [inst, p.name])).rows[0], 'Mapel dibuat.');
+  const name = rapiNama(p.name);
+  const ada = await pool.query('SELECT id FROM subjects WHERE institution_id=$1 AND grade_level=$2 AND lower(name)=lower($3)', [inst, p.grade_level, name]);
+  if (ada.rowCount) return fail(res, 400, 'VALIDATION_ERROR', `Mapel ${name} untuk tingkat ${p.grade_level} sudah ada.`);
+  ok(res, (await pool.query('INSERT INTO subjects(institution_id,grade_level,name) VALUES($1,$2,$3) RETURNING *', [inst, p.grade_level, name])).rows[0], 'Mapel dibuat.');
+}
+// Topik milik guru lewat created_by. Topik lama tanpa pemilik tetap terbaca
+// sebagai publik; admin sekolah boleh merapikannya, guru lain tidak.
+const adminSekolah = (req) => req.user.role === 'superadmin' || req.user.role === 'admin';
+
+// Topik diambil bersama sekolahnya sekaligus: satu query untuk cek izin,
+// supaya admin sekolah lain tak bisa menyentuh id yang cuma ditebak.
+async function topikMilik(req) {
+  return (await pool.query(
+    `SELECT t.id, t.subject_id, t.created_by, s.institution_id
+       FROM topics t LEFT JOIN subjects s ON s.id=t.subject_id
+      WHERE t.id=$1`, [req.params.id])).rows[0];
+}
+
+function bolehUbahTopik(req, topik) {
+  const sekolahSendiri = topik.institution_id === req.user.institution_id;
+  if (!sekolahSendiri && req.user.role !== 'superadmin') return 'asing';
+  if (topik.created_by !== req.user.id && !adminSekolah(req)) return 'bukan';
+  return null;
 }
 async function listTopics(req, res) {
   if (!req.query.subject_id) return fail(res, 400, 'VALIDATION_ERROR', 'subject_id wajib.');
-  const g = req.query.grade_level ? Number(req.query.grade_level) : null;
-  const q = g
-    ? await pool.query('SELECT * FROM topics WHERE subject_id=$1 AND grade_level=$2 ORDER BY name', [req.query.subject_id, g])
-    : await pool.query('SELECT * FROM topics WHERE subject_id=$1 ORDER BY grade_level,name', [req.query.subject_id]);
+  const inst = needTenant(req, res, req.query.institution_id);
+  if (!inst) return;
+  const admin = req.user.role === 'superadmin' || req.user.role === 'admin';
+  const q = admin
+    ? await pool.query(`SELECT t.* FROM topics t JOIN subjects s ON s.id=t.subject_id
+                         WHERE t.subject_id=$1 AND s.institution_id=$2 ORDER BY t.name`, [req.query.subject_id, inst])
+    : await pool.query(`SELECT t.* FROM topics t JOIN subjects s ON s.id=t.subject_id
+                         WHERE t.subject_id=$1 AND s.institution_id=$2 AND (t.created_by=$3 OR t.created_by IS NULL)
+                         ORDER BY t.name`, [req.query.subject_id, inst, req.user.id]);
   ok(res, q.rows);
 }
 async function createTopic(req, res) {
-  const p = z.object({ subject_id: z.number().int(), grade_level: z.number().int().min(1).max(12), name: z.string().min(1) }).parse(req.body);
-  ok(res, (await pool.query('INSERT INTO topics(subject_id,grade_level,name) VALUES($1,$2,$3) RETURNING *', [p.subject_id, p.grade_level, p.name])).rows[0], 'Topik dibuat.');
+  const p = z.object({ subject_id: z.number().int(), name: z.string().min(1) }).parse(req.body);
+  const inst = needTenant(req, res, req.body.institution_id);
+  if (!inst) return;
+  const sub = await pool.query('SELECT id FROM subjects WHERE id=$1 AND institution_id=$2', [p.subject_id, inst]);
+  if (!sub.rowCount) return fail(res, 404, 'NOT_FOUND', 'Mapel tak ditemukan.');
+  const name = rapiNama(p.name);
+  // Topik publik lama dengan nama sama dipakai ulang supaya tak ada dua label kembar.
+  const ada = await pool.query(
+    `SELECT * FROM topics WHERE subject_id=$1 AND lower(name)=lower($2) AND (created_by=$3 OR created_by IS NULL)
+      ORDER BY (created_by IS NULL), id LIMIT 1`,
+    [p.subject_id, name, req.user.id]
+  );
+  if (ada.rowCount) return ok(res, ada.rows[0], 'Topik sudah ada.');
+  ok(res, (await pool.query('INSERT INTO topics(subject_id,created_by,name) VALUES($1,$2,$3) RETURNING *', [p.subject_id, req.user.id, name])).rows[0], 'Topik dibuat.');
 }
 async function listChapters(req, res) {
   if (!req.query.topic_id) return fail(res, 400, 'VALIDATION_ERROR', 'topic_id wajib.');
@@ -335,14 +295,34 @@ async function createSubchapter(req, res) {
 // Ubah nama saja (pindah induk = hapus lalu buat ulang, biar tak salah pindah).
 async function updateSubject(req, res) {
   const p = z.object({ name: z.string().min(1) }).parse(req.body);
-  const q = await pool.query('UPDATE subjects SET name=$1 WHERE id=$2 RETURNING *', [p.name, req.params.id]);
-  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Mapel tak ada.');
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  const name = rapiNama(p.name);
+  const lama = (await pool.query('SELECT id, grade_level FROM subjects WHERE id=$1 AND institution_id=$2', [req.params.id, inst])).rows[0];
+  if (!lama) return fail(res, 404, 'NOT_FOUND', 'Mapel tak ada.');
+  const kembar = await pool.query(
+    'SELECT id FROM subjects WHERE institution_id=$1 AND grade_level=$2 AND lower(name)=lower($3) AND id<>$4',
+    [inst, lama.grade_level, name, req.params.id]
+  );
+  if (kembar.rowCount) return fail(res, 400, 'VALIDATION_ERROR', `Mapel ${name} untuk tingkat itu sudah ada.`);
+  const q = await pool.query('UPDATE subjects SET name=$1 WHERE id=$2 RETURNING *', [name, req.params.id]);
   ok(res, q.rows[0], 'Mapel diubah.');
 }
 async function updateTopic(req, res) {
   const p = z.object({ name: z.string().min(1) }).parse(req.body);
-  const q = await pool.query('UPDATE topics SET name=$1 WHERE id=$2 RETURNING *', [p.name, req.params.id]);
-  if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Topik tak ada.');
+  const name = rapiNama(p.name);
+  const lama = await topikMilik(req);
+  if (!lama) return fail(res, 404, 'NOT_FOUND', 'Topik tak ada.');
+  const tolak = bolehUbahTopik(req, lama);
+  if (tolak === 'asing') return fail(res, 404, 'NOT_FOUND', 'Topik tak ada.');
+  if (tolak) return fail(res, 403, 'FORBIDDEN', 'Topik ini milik guru lain. Hanya admin sekolah yang bisa mengubahnya.');
+  const kembar = await pool.query(
+    `SELECT id FROM topics WHERE subject_id=$1 AND lower(name)=lower($2) AND id<>$3
+       AND created_by IS NOT DISTINCT FROM $4`,
+    [lama.subject_id, name, req.params.id, lama.created_by]
+  );
+  if (kembar.rowCount) return fail(res, 400, 'VALIDATION_ERROR', `Topik ${name} sudah ada.`);
+  const q = await pool.query('UPDATE topics SET name=$1 WHERE id=$2 RETURNING *', [name, req.params.id]);
   ok(res, q.rows[0], 'Topik diubah.');
 }
 async function updateChapter(req, res) {
@@ -371,8 +351,28 @@ async function hapusBertingkat(req, res, tabel, label) {
     throw e;
   }
 }
-const deleteSubject = (req, res) => hapusBertingkat(req, res, 'subjects', 'Mapel');
-const deleteTopic = (req, res) => hapusBertingkat(req, res, 'topics', 'Topik');
+// Mapel dan topik dibatasi pemiliknya; bab/subbab cukup lewat helper di atas.
+async function deleteSubject(req, res) {
+  const inst = needTenant(req, res);
+  if (!inst) return;
+  try {
+    const q = await pool.query('DELETE FROM subjects WHERE id=$1 AND institution_id=$2 RETURNING id', [req.params.id, inst]);
+    if (!q.rowCount) return fail(res, 404, 'NOT_FOUND', 'Mapel tak ada.');
+    await audit(req, 'delete', 'subjects', req.params.id);
+    ok(res, null, 'Mapel dihapus.');
+  } catch (e) {
+    if (e.code === '23503') return fail(res, 400, 'VALIDATION_ERROR', 'Mapel ini masih dipakai soal atau materi. Hapus isinya dulu.');
+    throw e;
+  }
+}
+async function deleteTopic(req, res) {
+  const lama = await topikMilik(req);
+  if (!lama) return fail(res, 404, 'NOT_FOUND', 'Topik tak ada.');
+  const tolak = bolehUbahTopik(req, lama);
+  if (tolak === 'asing') return fail(res, 404, 'NOT_FOUND', 'Topik tak ada.');
+  if (tolak) return fail(res, 403, 'FORBIDDEN', 'Topik ini milik guru lain. Hanya admin sekolah yang bisa menghapusnya.');
+  return hapusBertingkat(req, res, 'topics', 'Topik');
+}
 const deleteChapter = (req, res) => hapusBertingkat(req, res, 'chapters', 'Bab');
 const deleteSubchapter = (req, res) => hapusBertingkat(req, res, 'sub_chapters', 'Subbab');
 
@@ -385,35 +385,16 @@ async function stats(req, res) {
     SELECT
       (SELECT name FROM institutions WHERE id=$1) AS sekolah,
       (SELECT npsn FROM institutions WHERE id=$1) AS npsn,
-      (SELECT COUNT(*) FROM classes WHERE institution_id=$1)::int AS kelas,
-      (SELECT COUNT(*) FROM students s JOIN classes c ON c.id=s.class_id WHERE c.institution_id=$1 AND s.is_active)::int AS siswa,
       (SELECT COUNT(*) FROM subjects WHERE institution_id=$1)::int AS mapel,
-      (SELECT COUNT(*) FROM sources WHERE institution_id=$1)::int AS materi,
+      (SELECT COUNT(*) FROM topics t JOIN subjects s ON s.id=t.subject_id WHERE s.institution_id=$1)::int AS topik,
       (SELECT COUNT(*) FROM questions WHERE institution_id=$1)::int AS soal,
-      (SELECT COUNT(*) FROM exams WHERE institution_id=$1)::int AS ujian,
-      (SELECT COUNT(*) FROM exam_sheets sh JOIN exams e ON e.id=sh.exam_id WHERE e.institution_id=$1)::int AS lembar,
-      (SELECT COUNT(*) FROM submissions su JOIN exam_sheets sh ON sh.id=su.sheet_id JOIN exams e ON e.id=sh.exam_id
-        WHERE e.institution_id=$1 AND su.status='needs_review')::int AS perlu_koreksi,
-      (SELECT COUNT(*) FROM submissions su JOIN exam_sheets sh ON sh.id=su.sheet_id JOIN exams e ON e.id=sh.exam_id
-        WHERE e.institution_id=$1 AND su.status='final')::int AS sudah_final,
-      -- Rincian untuk dashboard: kelas mana saja + jumlah siswanya, mapel mana saja + jumlah soalnya.
-      (SELECT COALESCE(json_agg(x ORDER BY x.nama), '[]'::json) FROM (
-        SELECT c.name AS nama,
-          (SELECT COUNT(*) FROM students st WHERE st.class_id=c.id AND st.is_active)::int AS siswa
-        FROM classes c WHERE c.institution_id=$1
-      ) x) AS kelas_rinci,
-      (SELECT COALESCE(json_agg(y ORDER BY y.nama), '[]'::json) FROM (
-        SELECT su.name AS nama,
-          (SELECT COUNT(*) FROM questions q WHERE q.subject_id=su.id)::int AS soal
-        FROM subjects su WHERE su.institution_id=$1
-      ) y) AS mapel_rinci
+      (SELECT COUNT(*) FROM exams WHERE institution_id=$1)::int AS ujian
   `, [inst])).rows[0]);
 }
 
 module.exports = {
   listInstitutions, createInstitution, updateInstitution, uploadLogos, listUsers, createUser, updateUser, resetUserPassword,
   listLetterheads, createLetterhead, updateLetterhead, listClasses, createClass, updateClass, deleteClass,
-  listStudents, createStudent, updateStudent, deleteStudent, importStudents, importStudentsFile,
   listSubjects, createSubject, updateSubject, deleteSubject, listTopics, createTopic, updateTopic, deleteTopic,
   listChapters, createChapter, updateChapter, deleteChapter, listSubchapters, createSubchapter, updateSubchapter, deleteSubchapter,
   stats,

@@ -89,3 +89,23 @@ CREATE TABLE IF NOT EXISTS password_resets(
   created_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_reset_user ON password_resets(user_id);
+
+-- Mapel dimiliki sekolah + tingkat: satu baris per tingkat, jadi Matematika
+-- kelas 4 dan kelas 5 adalah dua baris. Indeks uniknya dibuat di migrate-v2.js
+-- setelah baris lama dipecah (kalau dibuat di sini, migrasi gagal karena duplikat).
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS grade_level INT;
+
+-- Topik milik guru. Baris lama tanpa pemilik (NULL) tetap ada sebagai topik publik read-only.
+ALTER TABLE topics ADD COLUMN IF NOT EXISTS created_by INT REFERENCES users(id) ON DELETE CASCADE;
+-- Tingkat sekarang melekat di mapel, bukan di topik. Kolom lama dibuang setelah
+-- migrate-v2 memindahkan tingkatnya (kalau dibiarkan, ia membingungkan).
+ALTER TABLE topics DROP COLUMN IF EXISTS grade_level;
+
+-- Hanya soal yang disetujui guru yang dihitung dan dicetak.
+ALTER TABLE exam_questions ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT true;
+
+-- Kelas default guru, dipakai halaman Ujian untuk menentukan tingkat.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS default_class_id INT REFERENCES classes(id) ON DELETE SET NULL;
+
+-- Waktu ujian dibuat; dipakai untuk mengurutkan dan menampilkan di daftar.
+ALTER TABLE exams ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();

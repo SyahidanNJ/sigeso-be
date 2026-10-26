@@ -18,18 +18,12 @@ function needTenant(req, res, bodyInst) {
   return Number(id);
 }
 
-// Ujian/lembar hanya boleh disentuh pemiliknya. Dipakai di rute yang dulu cuma
-// memakai id (nilai, cetak, ekspor) supaya sekolah lain tak bisa menebak id.
+// Ujian hanya boleh disentuh pemiliknya. Dipakai di rute yang cuma memakai id
+// (cetak, kunci) supaya sekolah lain tak bisa menebak id.
 async function ujianMilik(inst, examId) {
   if (!inst) return false;
   const r = await pool.query('SELECT id FROM exams WHERE id=$1 AND institution_id=$2', [examId, inst]);
   return r.rowCount > 0;
 }
 
-async function lembarMilik(inst, sheetId) {
-  if (!inst) return false;
-  const r = await pool.query('SELECT sh.id FROM exam_sheets sh JOIN exams e ON e.id=sh.exam_id WHERE sh.id=$1 AND e.institution_id=$2', [sheetId, inst]);
-  return r.rowCount > 0;
-}
-
-module.exports = { tenantId, needTenant, ujianMilik, lembarMilik };
+module.exports = { tenantId, needTenant, ujianMilik };

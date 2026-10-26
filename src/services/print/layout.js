@@ -114,7 +114,6 @@ function metaTypst(exam) {
   const baris = [
     ['Mata Pelajaran', `[${esc(exam.mapel || '-')}]`],
     ['Hari/tanggal', isian],
-    ['Kelas', `[${esc(kelasCetak(exam.kelas))}]`],
     ['Waktu', isian],
   ];
   return `#v(6pt)
@@ -127,23 +126,44 @@ ${baris.map(([a, b]) => `  [${a}], [:], ${b},`).join('\n')}
 `;
 }
 
-function identitasTypst({ student, exam, qr }) {
-  return `#v(1pt)
+// Lembar soal dipakai satu kelas, jadi identitas siswa dikosongkan dan diisi tangan.
+function identitasKosongTypst(exam) {
+  const isian = 'table.cell(stroke: (bottom: (paint: black, thickness: 0.5pt, dash: "dotted")))[]';
+  return `#v(2pt)
 #line(length: 100%, stroke: 0.6pt)
 #v(2pt)
-#grid(
-  columns: (1fr, auto),
-  align: (left + top, right + top),
-  [
-    Nama: #strong[${esc(student.name)}] \\
-    NIS: ${esc(student.nis)} \\
-    Kelas: ${esc(kelasCetak(exam.kelas))}
-  ],
-  [#image("${qr}", width: 1.6cm)],
+#table(
+  columns: (2.4cm, 0.2cm, 1fr, 2.4cm, 0.2cm, 1fr),
+  stroke: none,
+  inset: (x: 0pt, y: 3pt),
+  [Nama], [:], ${isian}, [Kelas], [:], [${esc(kelasCetak(exam.kelas))}],
+  [NIS], [:], ${isian}, [No. Absen], [:], ${isian},
 )
 #v(2pt)
 #line(length: 100%, stroke: 0.6pt)
 `;
+}
+
+// Kunci jawaban: satu tabel per jenis soal, plus rubrik uraian bila ada.
+function kunciTypst(items) {
+  const bagian = (t) => {
+    const isi = items.filter((q) => q.qtype === t);
+    if (!isi.length) return '';
+    const sel = isi.map((q) => `  [${q.nomor}], [${esc(q.answer_key)}${q.rubric ? ` #linebreak() #text(size: 8.5pt, style: "italic")[${esc(q.rubric)}]` : ''}],`).join('\n');
+    return `#v(8pt)
+#text(size: 11pt, weight: "bold")[${JENIS[t].huruf}. ${JENIS[t].label}]
+#v(4pt)
+#table(
+  columns: (1.2cm, 1fr),
+  inset: (x: 4pt, y: 5pt),
+  [*No*], [*Kunci*],
+${sel}
+)
+`;
+  };
+  return `#v(6pt)
+#align(center)[#text(size: 13pt, weight: "bold")[KUNCI JAWABAN]]
+${['PG', 'ISIAN', 'URAIAN'].map(bagian).join('')}`;
 }
 
 function opsiTypst(options) {
@@ -185,77 +205,4 @@ ${soalItem(q)}]
   return out;
 }
 
-function lembarJawabanTypst({ student, exam, qr, items }) {
-  const perJenis = (t) => items.filter((q) => q.qtype === t);
-  const judul = (t) => `#v(10pt)\n#text(size: 11pt, weight: "bold")[${JENIS[t].huruf}. ${JENIS[t].label}]\n#v(4pt)\n`;
-  let isi = '';
-
-  // PG: tiga pasang nomor-jawaban per baris supaya ringkas saat dikoreksi.
-  const pg = perJenis('PG');
-  if (pg.length) {
-    const tinggi = Math.ceil(pg.length / 3);
-    const kolom = Math.ceil(pg.length / tinggi);
-    const baris = [];
-    for (let r = 0; r < tinggi; r++) {
-      const sel = [];
-      for (let c = 0; c < kolom; c++) {
-        const q = pg[c * tinggi + r];
-        sel.push(q ? `[${q.nomor}], []` : '[], []');
-      }
-      baris.push(`  ${sel.join(', ')},`);
-    }
-    const kolomTypst = Array.from({ length: kolom }, () => '1.2cm, 1fr').join(', ');
-    const kepala = Array.from({ length: kolom }, () => '[*No*], [*Jawaban*]').join(', ');
-    isi += `${judul('PG')}#table(
-  columns: (${kolomTypst}),
-  inset: (x: 4pt, y: 5pt),
-  ${kepala},
-${baris.join('\n')}
-)
-`;
-  }
-
-  const isian = perJenis('ISIAN');
-  if (isian.length) {
-    isi += `${judul('ISIAN')}#table(
-  columns: (1.2cm, 1fr),
-  inset: (x: 4pt, y: 6pt),
-  [*No*], [*Jawaban*],
-${isian.map((q) => `  [${q.nomor}], [],`).join('\n')}
-)
-`;
-  }
-
-  // Uraian: empat baris tulis per soal, satu blok tidak boleh terbelah halaman.
-  const uraian = perJenis('URAIAN');
-  if (uraian.length) {
-    const baris = uraian.map((q) => `#block(breakable: false, inset: (bottom: 22pt))[
-#grid(columns: (0.8cm, 1fr),
-  [#v(2pt)${q.nomor}.],
-  [#v(9pt)#line(length: 100%, stroke: 0.5pt)
-#v(20pt)#line(length: 100%, stroke: 0.5pt)
-#v(20pt)#line(length: 100%, stroke: 0.5pt)
-#v(20pt)#line(length: 100%, stroke: 0.5pt)])
-]`).join('\n');
-    isi += `${judul('URAIAN')}${baris}
-`;
-  }
-
-  return `#pagebreak()
-#align(center)[#text(size: 13pt, weight: "bold")[LEMBAR JAWABAN]]
-#v(4pt)
-#grid(
-  columns: (1fr, auto),
-  align: (left + top, right + top),
-  [
-    Nama: #strong[${esc(student.name)}] \\
-    NIS: ${esc(student.nis)} \\
-    Kelas: ${esc(kelasCetak(exam.kelas))} \\
-    Mata Pelajaran: ${esc(exam.mapel || '-')}
-  ],
-  [#image("${qr}", width: 1.8cm)],
-)
-${isi}`;
-}
-
-module.exports = { esc, JENIS, copyLogos, kopOtomatis, kopTypst, judulTypst, metaTypst, identitasTypst, soalTypst, lembarJawabanTypst };
+module.exports = { esc, JENIS, copyLogos, kopOtomatis, kopTypst, judulTypst, metaTypst, identitasKosongTypst, soalTypst, kunciTypst };

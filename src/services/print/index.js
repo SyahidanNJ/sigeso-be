@@ -1,12 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const QR = require('qrcode');
-const { randomBytes } = require('crypto');
 const { pool } = require('../../db/pool');
 const { AppError } = require('../../lib/errors');
 const {
-  kopTypst, judulTypst, metaTypst, identitasTypst, soalTypst, lembarJawabanTypst, copyLogos,
+  kopTypst, judulTypst, metaTypst, identitasKosongTypst, soalTypst, kunciTypst, copyLogos,
 } = require('./layout');
 
 const DIR = path.join(__dirname, '..', '..', '..', 'uploads', 'print');
@@ -40,7 +38,7 @@ async function getKop(institutionId, paperSize) {
 // Data yang dibutuhkan kop dan blok identitas: kelas, tahun pelajaran, mapel.
 async function konteksUjian(examId) {
   const exam = (await pool.query(`
-    SELECT e.*, c.name AS kelas, c.academic_year, s.name AS mapel
+    SELECT e.*, c.name AS kelas, c.academic_year, c.level AS tingkat, s.name AS mapel
     FROM exams e
     JOIN classes c ON c.id=e.class_id
     LEFT JOIN subjects s ON s.id=e.subject_id
@@ -51,86 +49,62 @@ async function konteksUjian(examId) {
   return { exam, inst, kop };
 }
 
-async function ambilSoal(examId) {
-  return rapikan((await pool.query(
-    'SELECT q.*, eq.nomor FROM exam_questions eq JOIN questions q ON q.id=eq.question_id WHERE eq.exam_id=$1 ORDER BY eq.nomor', [examId]
-  )).rows);
+// Hanya soal yang disetujui guru. Nomor dicetak ulang 1..n supaya tidak ada
+// nomor bolong akibat soal yang belum disetujui atau sudah dikeluarkan.
+async function soalDisetujui(examId) {
+  const rows = rapikan((await pool.query(
+    `SELECT q.* FROM exam_questions eq
+       JOIN questions q ON q.id=eq.question_id
+      WHERE eq.exam_id=$1 AND eq.approved
+      ORDER BY eq.nomor, q.id`, [examId])).rows);
+  return rows.map((q, i) => ({ ...q, nomor: i + 1 }));
 }
 
-function renderSheet({ exam, inst, kop, logos, student, items, qr1, qr2 }) {
-  return `${kopTypst({ kop, inst, logos })}
-${judulTypst(exam)}
-${metaTypst(exam)}
-${identitasTypst({ student, exam, qr: qr1 })}
-${soalTypst(items)}
-${lembarJawabanTypst({ student, exam, qr: qr2, items })}`;
+function buatJob(awalan, examId) {
+  const jobDir = path.join(DIR, `${awalan}-${examId}-${Date.now()}`);
+  fs.mkdirSync(jobDir, { recursive: true });
+  return jobDir;
 }
 
-async function sheetFor(examId, studentId) {
-  let s = await pool.query('SELECT * FROM exam_sheets WHERE exam_id=$1 AND student_id=$2', [examId, studentId]);
-  if (!s.rowCount) {
-    const base = 'SG' + randomBytes(6).toString('hex');
-    s = await pool.query('INSERT INTO exam_sheets(exam_id,student_id,qr_base) VALUES($1,$2,$3) RETURNING *', [examId, studentId, base]);
-    await pool.query('INSERT INTO exam_sheet_pages(sheet_id,page_no,qr_code) VALUES($1,1,$2),($1,2,$3)', [s.rows[0].id, `${base}:p1`, `${base}:p2`]);
-    s = await pool.query('SELECT * FROM exam_sheets WHERE id=$1', [s.rows[0].id]);
-  }
-  return s.rows[0];
+async function renderPdf(jobDir, nama, isi) {
+  const typ = path.join(jobDir, `${nama}.typ`);
+  fs.writeFileSync(typ, isi);
+  const pdf = path.join(jobDir, `${nama}.pdf`);
+  await compile(typ, pdf);
+  return `${path.basename(jobDir)}/${nama}.pdf`;
 }
 
+// Satu lembar soal untuk difotokopi guru. Tanpa siswa, QR, atau lembar jawaban.
 async function printExam(examId) {
   const { exam, inst, kop } = await konteksUjian(examId);
-  const items = await ambilSoal(examId);
-  if (!items.length) throw new AppError('VALIDATION_ERROR', 'Ujian belum punya soal.');
-  const students = (await pool.query('SELECT * FROM students WHERE class_id=$1 AND is_active=true ORDER BY name', [exam.class_id])).rows;
-  if (!students.length) throw new AppError('VALIDATION_ERROR', 'Kelas belum punya siswa.');
-
-  const jobDir = path.join(DIR, `exam-${examId}-${Date.now()}`);
-  fs.mkdirSync(jobDir, { recursive: true });
+  const items = await soalDisetujui(examId);
+  if (!items.length) throw new AppError('VALIDATION_ERROR', 'Belum ada soal yang disetujui. Setujui dulu di daftar review.');
+  const jobDir = buatJob('ujian', examId);
   const logos = copyLogos(jobDir, inst);
-  const parts = [`${paperSize(exam.paper_size)}\n#set text(lang: "id", size: 10.5pt)\n`];
-  for (let i = 0; i < students.length; i++) {
-    const st = students[i];
-    const sheet = await sheetFor(examId, st.id);
-    const qr1 = `qr-${sheet.id}-1.png`;
-    const qr2 = `qr-${sheet.id}-2.png`;
-    await QR.toFile(path.join(jobDir, qr1), `${sheet.qr_base}:p1`, { width: 120 });
-    await QR.toFile(path.join(jobDir, qr2), `${sheet.qr_base}:p2`, { width: 120 });
-    parts.push(renderSheet({ exam, inst, kop, logos, student: st, items, qr1, qr2 }));
-    if (i < students.length - 1) parts.push('#pagebreak()\n');
-    await pool.query('UPDATE exam_sheets SET pdf_path=$1 WHERE id=$2', [jobDir, sheet.id]);
-  }
-  const typ = path.join(jobDir, 'semua.typ');
-  fs.writeFileSync(typ, parts.join('\n'));
-  const pdf = path.join(jobDir, `cetak-ujian-${examId}.pdf`);
-  await compile(typ, pdf);
-  return { file: path.basename(jobDir) + `/cetak-ujian-${examId}.pdf`, sheets: students.length };
+  const isi = `${paperSize(exam.paper_size)}
+#set text(lang: "id", size: 10.5pt)
+${kopTypst({ kop, inst, logos })}
+${judulTypst(exam)}
+${metaTypst(exam)}
+${identitasKosongTypst(exam)}
+${soalTypst(items)}`;
+  return { file: await renderPdf(jobDir, `soal-ujian-${examId}`, isi), count: items.length };
 }
 
-// Cetak ulang satu lembar memakai renderer yang sama dengan cetak semua.
-async function reprintSheet(sheetId) {
-  const sh = (await pool.query('SELECT * FROM exam_sheets WHERE id=$1', [sheetId])).rows[0];
-  if (!sh) throw new AppError('NOT_FOUND', 'Lembar tak ada.');
-  const student = (await pool.query('SELECT * FROM students WHERE id=$1', [sh.student_id])).rows[0];
-  const { exam, inst, kop } = await konteksUjian(sh.exam_id);
-  const items = await ambilSoal(sh.exam_id);
-
-  const jobDir = path.join(DIR, `reprint-${sheetId}-${Date.now()}`);
-  fs.mkdirSync(jobDir, { recursive: true });
+// Kunci jawaban dicetak terpisah agar tidak ikut terfotokopi bersama soal.
+async function printAnswerKey(examId) {
+  const { exam, inst, kop } = await konteksUjian(examId);
+  const items = await soalDisetujui(examId);
+  if (!items.length) throw new AppError('VALIDATION_ERROR', 'Belum ada soal yang disetujui.');
+  const jobDir = buatJob('kunci', examId);
   const logos = copyLogos(jobDir, inst);
-  const qr1 = 'qr-1.png';
-  const qr2 = 'qr-2.png';
-  await QR.toFile(path.join(jobDir, qr1), `${sh.qr_base}:p1`, { width: 120 });
-  await QR.toFile(path.join(jobDir, qr2), `${sh.qr_base}:p2`, { width: 120 });
-
-  const typ = `${paperSize(exam.paper_size)}\n#set text(lang: "id", size: 10.5pt)\n${renderSheet({ exam, inst, kop, logos, student, items, qr1, qr2 })}`;
-  fs.writeFileSync(path.join(jobDir, 'satu.typ'), typ);
-  const pdf = path.join(jobDir, `lembar-${sheetId}.pdf`);
-  await compile(path.join(jobDir, 'satu.typ'), pdf);
-  return {
-    rel: `${path.basename(jobDir)}/lembar-${sheetId}.pdf`,
-    institution_id: exam.institution_id,
-    exam_id: exam.id,
-  };
+  const isi = `${paperSize(exam.paper_size)}
+#set text(lang: "id", size: 10.5pt)
+${kopTypst({ kop, inst, logos })}
+${judulTypst(exam)}
+${metaTypst(exam)}
+${kunciTypst(items)}`;
+  return { file: await renderPdf(jobDir, `kunci-ujian-${examId}`, isi), count: items.length };
 }
 
-module.exports = { printExam, reprintSheet, DIR };
+module.exports = { printExam, printAnswerKey, soalDisetujui, DIR };

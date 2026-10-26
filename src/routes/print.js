@@ -6,8 +6,8 @@ const c = require('../controllers/print');
 const r = express.Router();
 r.use(auth);
 
+// Satu lembar soal untuk difotokopi, plus kunci jawaban sebagai berkas terpisah.
 r.post('/exams/:id/print', roles(...GURU), asyncH(c.printUjian));
-r.get('/exams/:id/sheets', asyncH(c.listSheets));
-r.post('/sheets/:id/reprint', roles(...GURU), asyncH(c.reprintSheet));
+r.post('/exams/:id/answer-key', roles(...GURU), asyncH(c.kunciJawaban));
 
 module.exports = r;

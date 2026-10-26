@@ -16,9 +16,9 @@ function absolut(rel) {
   return f.startsWith(path.resolve(UPLOAD) + path.sep) ? f : null;
 }
 
-// Job cetak/ekspor menaruh beberapa berkas dalam satu folder: exam-*, reprint-*,
-// dokumen-*, nilai-*. Folder bersama (print/export/sources/jawaban) tak boleh dibuang.
-const FOLDER_JOB = /^(exam|reprint|dokumen|nilai)-/;
+// Job cetak menaruh berkas dalam satu folder: ujian-*, kunci-*. Folder bersama
+// (print/sources) tak boleh dibuang.
+const FOLDER_JOB = /^(ujian|kunci)-/;
 
 // Catat hasil cetak/ekspor. Gagal mencatat tak boleh membatalkan unduhan yang sudah jadi.
 async function catatBerkas({ institution_id, exam_id, kind, rel }) {

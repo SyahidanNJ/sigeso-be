@@ -27,8 +27,6 @@ app.use('/api/v1', require('./routes/master'));
 app.use('/api/v1', require('./routes/sources'));
 app.use('/api/v1', require('./routes/bank'));
 app.use('/api/v1', require('./routes/print'));
-app.use('/api/v1', require('./routes/grade'));
-app.use('/api/v1', require('./routes/export'));
 app.use('/api/v1', require('./routes/download'));
 app.use('/api/v1', require('./routes/jobs'));
 app.use('/api/v1', require('./routes/referensi'));

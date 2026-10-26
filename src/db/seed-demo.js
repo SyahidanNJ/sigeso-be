@@ -4,23 +4,16 @@ const path = require('path');
 const { Pool } = require('pg');
 
 // Data contoh yang mengikuti alur aplikasi:
-// sekolah -> kop -> kelas & siswa -> mapel > topik > bab > subbab -> materi -> soal -> ujian.
-// Aman dijalankan berulang: yang sudah ada dipakai ulang (nama siswa yang sudah ada
-// tidak pernah ditimpa).
+// sekolah -> kop -> kelas -> mapel > topik > bab > subbab -> materi -> soal -> ujian.
+// Aman dijalankan berulang: yang sudah ada dipakai ulang.
 const TAHUN = '2026/2027';
 const DIR_SUMBER = path.join(__dirname, '..', '..', 'uploads', 'sources');
-const MURID_PER_KELAS = 12;
 
 const KELAS = [
   { name: 'Kelas 4', jenjang: 'SD', level: 4 },
   { name: 'Kelas 5', jenjang: 'SD', level: 5 },
   { name: 'Kelas 6', jenjang: 'SD', level: 6 },
 ];
-
-// Nama siswa dibangkitkan dari dua daftar ini supaya berkas tetap ringkas.
-const DEPAN = ['Aisyah', 'Bagas', 'Citra', 'Dimas', 'Eka', 'Fajar', 'Galih', 'Hana', 'Indra', 'Joko', 'Kirana', 'Laras', 'Maulana', 'Nadia', 'Oki', 'Putri', 'Rizky', 'Sari'];
-const BELAKANG = ['Pratama', 'Dewi', 'Santoso', 'Rahmawati', 'Hidayat', 'Nugroho', 'Wijaya', 'Lestari', 'Saputra', 'Kurniawan', 'Maharani', 'Firmansyah', 'Anggraini', 'Setiawan', 'Utami', 'Permana', 'Salsabila', 'Harahap'];
-const namaSiswa = (i, level) => `${DEPAN[i % DEPAN.length]} ${BELAKANG[(i * 5 + level * 3) % BELAKANG.length]}`;
 
 // Soal per paket materi. PG: kunci satu huruf. ISIAN/URAIAN: kunci teks.
 const PAKET = [
@@ -244,7 +237,7 @@ async function cariBuat(cariSql, cariP, buatSql, buatP, label) {
     baris.push(`kop ${ukuran}: baru`);
   }
 
-  // Kelas & siswa
+  // Kelas (tanpa siswa: alur cetak sekarang satu lembar per kelas)
   const kelasId = {};
   for (const k of KELAS) {
     const kelas = await cariBuat(
@@ -252,20 +245,15 @@ async function cariBuat(cariSql, cariP, buatSql, buatP, label) {
       'INSERT INTO classes(institution_id,name,academic_year,jenjang,level) VALUES($1,$2,$3,$4,$5) RETURNING *',
       [inst.id, k.name, TAHUN, k.jenjang, k.level], `kelas ${k.name}`);
     kelasId[k.level] = kelas.id;
-    for (let i = 0; i < MURID_PER_KELAS; i++) {
-      await pool.query('INSERT INTO students(class_id,name,nis) VALUES($1,$2,$3) ON CONFLICT(class_id,nis) DO NOTHING',
-        [kelas.id, namaSiswa(i, k.level), `${k.level}${String(i + 1).padStart(3, '0')}`]);
-    }
-    const n = Number((await satu('SELECT COUNT(*)::int n FROM students WHERE class_id=$1 AND is_active', [kelas.id])).n);
-    baris.push(`kelas ${k.name}: #${kelas.id} (${n} siswa)`);
+    baris.push(`kelas ${k.name}: #${kelas.id}`);
   }
 
   // Materi > soal > ujian, satu paket satu putaran
   for (const p of PAKET) {
-    const mapel = await cariBuat('SELECT * FROM subjects WHERE institution_id=$1 AND name=$2 ORDER BY id LIMIT 1', [inst.id, p.mapel],
-      'INSERT INTO subjects(institution_id,name) VALUES($1,$2) RETURNING *', [inst.id, p.mapel], `mapel ${p.mapel}`);
-    const topik = await cariBuat('SELECT * FROM topics WHERE subject_id=$1 AND grade_level=$2 AND name=$3 ORDER BY id LIMIT 1', [mapel.id, p.tingkat, p.topik],
-      'INSERT INTO topics(subject_id,grade_level,name) VALUES($1,$2,$3) RETURNING *', [mapel.id, p.tingkat, p.topik], `topik ${p.topik} (t${p.tingkat})`);
+    const mapel = await cariBuat('SELECT * FROM subjects WHERE institution_id=$1 AND grade_level=$2 AND lower(name)=lower($3) ORDER BY id LIMIT 1', [inst.id, p.tingkat, p.mapel],
+      'INSERT INTO subjects(institution_id,grade_level,name) VALUES($1,$2,$3) RETURNING *', [inst.id, p.tingkat, p.mapel], `mapel ${p.mapel} (t${p.tingkat})`);
+    const topik = await cariBuat('SELECT * FROM topics WHERE subject_id=$1 AND lower(name)=lower($2) AND (created_by=$3 OR created_by IS NULL) ORDER BY id LIMIT 1', [mapel.id, p.topik, buat],
+      'INSERT INTO topics(subject_id,created_by,name) VALUES($1,$2,$3) RETURNING *', [mapel.id, buat, p.topik], `topik ${p.topik} (t${p.tingkat})`);
     const bab = await cariBuat('SELECT * FROM chapters WHERE topic_id=$1 AND name=$2 ORDER BY id LIMIT 1', [topik.id, p.bab],
       'INSERT INTO chapters(topic_id,name) VALUES($1,$2) RETURNING *', [topik.id, p.bab], `bab ${p.bab}`);
     const sub = await cariBuat('SELECT * FROM sub_chapters WHERE chapter_id=$1 AND name=$2 ORDER BY id LIMIT 1', [bab.id, p.subbab],
@@ -302,13 +290,13 @@ async function cariBuat(cariSql, cariP, buatSql, buatP, label) {
     if (!nItem) {
       const daftar = (await pool.query('SELECT id FROM questions WHERE sub_chapter_id=$1 ORDER BY id', [sub.id])).rows;
       let no = 1;
-      for (const q of daftar) await pool.query('INSERT INTO exam_questions(exam_id,question_id,nomor) VALUES($1,$2,$3)', [ujian.id, q.id, no++]);
+      for (const q of daftar) await pool.query('INSERT INTO exam_questions(exam_id,question_id,nomor,approved) VALUES($1,$2,$3,true)', [ujian.id, q.id, no++]);
     }
     baris.push(`ujian ${ujian.title}: #${ujian.id} (${ujianBaru ? 'baru' : 'sudah ada'}, ${ujian.paper_size})`);
   }
 
   console.log(`SEED SELESAI — ${baris.length} baris data`);
   for (const b of baris) console.log('  - ' + b);
-  console.log('\nLangkah lanjut: Materi (sumber sudah siap) > Soal (Buat soal AI) > Ujian > Cetak lembar > Nilai.');
+  console.log('\nLangkah lanjut: Ujian > Generate > Setujui soal > Cetak soal dan kunci.');
   await pool.end();
 })().catch((e) => { console.error('GAGAL:', e.message); process.exit(1); });

@@ -92,6 +92,15 @@ async function selaraskanMapelSoal(pool) {
   return r.rowCount;
 }
 
+// Materi lama menempel ke subbab; topiknya ditelusuri lewat bab.
+async function pindahkanMateriKeTopik(pool) {
+  const r = await pool.query(`
+    UPDATE sources s SET topic_id = c.topic_id
+      FROM sub_chapters sc JOIN chapters c ON c.id = sc.chapter_id
+     WHERE s.topic_id IS NULL AND sc.id = s.sub_chapter_id AND c.topic_id IS NOT NULL`);
+  return r.rowCount;
+}
+
 async function isiKelasDefault(pool, stat) {
   const r = await pool.query(`
     UPDATE users u SET default_class_id = (
@@ -113,7 +122,7 @@ async function pasangIndeks(pool) {
 }
 
 async function backfill(pool) {
-  const stat = { mapelDipecah: 0, mapelDigabung: 0, soalDiselaraskan: 0, kelasDefault: 0 };
+  const stat = { mapelDipecah: 0, mapelDigabung: 0, soalDiselaraskan: 0, kelasDefault: 0, materiKeTopik: 0 };
 
   // Spasi berlebih dan spasi di ujung membuat pencarian nama meleset.
   await pool.query(`UPDATE subjects SET name = btrim(regexp_replace(name, '\\s+', ' ', 'g'))
@@ -125,6 +134,7 @@ async function backfill(pool) {
   await gabungMapelKembar(pool, stat);
   stat.soalDiselaraskan = await selaraskanMapelSoal(pool);
   await isiKelasDefault(pool, stat);
+  stat.materiKeTopik = await pindahkanMateriKeTopik(pool);
   await pasangIndeks(pool);
   return stat;
 }

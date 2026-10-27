@@ -62,30 +62,42 @@ async function robotsAllowed(url) {
   }
 }
 
+// Topik harus milik sekolah yang sama; tanpa ini materi bisa menempel ke topik
+// sekolah lain hanya dengan menebak id.
+async function topikSah(topicId, inst) {
+  if (!topicId) return false;
+  const r = await pool.query(
+    'SELECT 1 FROM topics t JOIN subjects s ON s.id=t.subject_id WHERE t.id=$1 AND s.institution_id=$2',
+    [topicId, inst]
+  );
+  return r.rowCount > 0;
+}
+
 // shortcut: ekstraksi sinkron (file kecil). Upgrade ke antrean latar bila file besar/menumpuk.
 async function uploadSource(req, res) {
-  const sub = Number(req.body.sub_chapter_id) || null;
+  const topik = Number(req.body.topic_id) || null;
   const inst = needTenant(req, res, req.body.institution_id);
   if (!inst) return;
   if (!req.file) return fail(res, 400, 'VALIDATION_ERROR', 'File wajib.');
+  if (!(await topikSah(topik, inst))) return fail(res, 400, 'VALIDATION_ERROR', 'Pilih topiknya dulu.');
   const ext = path.extname(req.file.originalname).toLowerCase();
   try {
     const text = await extractText(req.file.path, ext);
     const txtPath = req.file.path + '.txt';
     fs.writeFileSync(txtPath, text);
     const q = await pool.query(
-      "INSERT INTO sources(institution_id,sub_chapter_id,kind,file_path,extracted_path,status,created_by,original_name) VALUES($1,$2,'upload',$3,$4,'done',$5,$6) RETURNING *",
-      [inst, sub, req.file.path, txtPath, req.user.id, req.file.originalname]
+      "INSERT INTO sources(institution_id,topic_id,kind,file_path,extracted_path,status,created_by,original_name) VALUES($1,$2,'upload',$3,$4,'done',$5,$6) RETURNING *",
+      [inst, topik, req.file.path, txtPath, req.user.id, req.file.originalname]
     );
     ok(res, { ...q.rows[0], chars: text.length }, 'Berkas materi tersimpan.');
   } catch (e) {
-    await pool.query("INSERT INTO sources(institution_id,sub_chapter_id,kind,file_path,status,error,created_by) VALUES($1,$2,'upload',$3,'failed',$4,$5)", [inst, sub, req.file.path, String(e.message).slice(0, 500), req.user.id]);
+    await pool.query("INSERT INTO sources(institution_id,topic_id,kind,file_path,status,error,created_by) VALUES($1,$2,'upload',$3,'failed',$4,$5)", [inst, topik, req.file.path, String(e.message).slice(0, 500), req.user.id]);
     throw new AppError('SOURCE_SCRAPE_FAILED', 'Gagal mengekstrak file.');
   }
 }
 
 async function scrapeUrl(req, res) {
-  const p = z.object({ url: z.string().url(), sub_chapter_id: z.number().int().optional() }).parse(req.body);
+  const p = z.object({ url: z.string().url(), topic_id: z.number().int() }).parse(req.body);
   const u = new URL(p.url);
   if (!['http:', 'https:'].includes(u.protocol)) throw new AppError('SOURCE_BLOCKED_SSRF', 'Hanya http/https.');
   const addrs = await dns.lookup(u.hostname, { all: true }).catch(() => { throw new AppError('SOURCE_SCRAPE_FAILED', 'Domain tak dikenal.'); });
@@ -93,6 +105,7 @@ async function scrapeUrl(req, res) {
   if (!(await robotsAllowed(p.url))) throw new AppError('SOURCE_BLOCKED_SSRF', 'robots.txt melarang scraping URL ini.');
   const inst = needTenant(req, res, req.body.institution_id);
   if (!inst) return;
+  if (!(await topikSah(p.topic_id, inst))) return fail(res, 400, 'VALIDATION_ERROR', 'Topik tak ditemukan di sekolah ini.');
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 10000);
   let html = '';
@@ -114,15 +127,15 @@ async function scrapeUrl(req, res) {
   const f = path.join(DIR, `url-${Date.now()}.txt`);
   fs.writeFileSync(f, `Sumber: ${p.url}\n\n${clean}`);
   const q = await pool.query(
-    "INSERT INTO sources(institution_id,sub_chapter_id,kind,original_url,extracted_path,status,created_by) VALUES($1,$2,'url',$3,$4,'done',$5) RETURNING *",
-    [inst, p.sub_chapter_id || null, p.url, f, req.user.id]
+    "INSERT INTO sources(institution_id,topic_id,kind,original_url,extracted_path,status,created_by) VALUES($1,$2,'url',$3,$4,'done',$5) RETURNING *",
+    [inst, p.topic_id, p.url, f, req.user.id]
   );
   ok(res, { ...q.rows[0], chars: clean.length }, 'Materi dari link tersimpan.');
 }
 
 async function listSources(req, res) {
-  const q = req.query.sub_chapter_id
-    ? await pool.query('SELECT id,kind,original_url,original_name,file_path,status,error FROM sources WHERE sub_chapter_id=$1 AND institution_id=$2 ORDER BY id DESC', [req.query.sub_chapter_id, req.user.institution_id])
+  const q = req.query.topic_id
+    ? await pool.query('SELECT id,kind,original_url,original_name,file_path,status,error FROM sources WHERE topic_id=$1 AND institution_id=$2 ORDER BY id DESC', [req.query.topic_id, req.user.institution_id])
     : await pool.query('SELECT id,kind,original_url,original_name,file_path,status,error FROM sources WHERE institution_id=$1 ORDER BY id DESC LIMIT 50', [req.user.institution_id]);
   // Path mentah tak perlu sampai ke layar; cukup nama berkasnya.
   ok(res, q.rows.map(({ file_path, ...s }) => ({ ...s, nama: namaBerkas({ ...s, file_path }) })));

@@ -109,3 +109,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS default_class_id INT REFERENCES class
 
 -- Waktu ujian dibuat; dipakai untuk mengurutkan dan menampilkan di daftar.
 ALTER TABLE exams ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+
+-- Materi menempel ke topik. Bab/subbab tak lagi dipakai di layar bank soal;
+-- kolom sub_chapter_id dibiarkan (nullable) demi data lama, diisi topiknya oleh
+-- migrate-v2.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS topic_id INT REFERENCES topics(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_sources_topic ON sources(topic_id);

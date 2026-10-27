@@ -7,7 +7,7 @@ const { audit } = require('./bantuan');
 const { AppError } = require('../lib/errors');
 const { hapusBerkasRel } = require('../lib/berkas');
 const { generateText } = require('../services/llm');
-const { buildGeneratePrompt, rapikanHasil, saringSoal, parseJson } = require('../services/llm/prompts');
+const { buildGeneratePrompt, rapikanHasil, saringSoal, potongSesuaiRencana, parseJson } = require('../services/llm/prompts');
 
 // ---- BANK SOAL (reusable) ----
 // Ikut membawa nama mapel/tingkat/subbab supaya daftar soal bisa dikelompokkan dan
@@ -136,19 +136,27 @@ async function cariBuatTopik(subjectId, userId, nama) {
 
 async function materiTopik(topicId) {
   const s = await pool.query(
-    `SELECT s.extracted_path FROM sources s
-       JOIN sub_chapters sc ON sc.id = s.sub_chapter_id
-       JOIN chapters c ON c.id = sc.chapter_id
-      WHERE c.topic_id=$1 AND s.status='done' ORDER BY s.id DESC LIMIT 3`, [topicId]);
+    "SELECT extracted_path FROM sources WHERE topic_id=$1 AND status='done' ORDER BY id DESC LIMIT 3", [topicId]);
   return s.rows.map((x) => { try { return fs.readFileSync(x.extracted_path, 'utf8'); } catch { return ''; } }).join('\n').slice(0, 12000);
 }
+
+// Tiap topik menyebut jumlah per jenis soal; boleh 0 supaya guru bisa membuat
+// ujian tanpa uraian, misalnya. Minimal satu jenis harus terisi.
+const JumlahTopik = z.object({
+  name: z.string().trim().min(1).max(120),
+  pg: z.number().int().min(0).max(20).default(0),
+  isian: z.number().int().min(0).max(20).default(0),
+  uraian: z.number().int().min(0).max(20).default(0),
+}).refine((t) => t.pg + t.isian + t.uraian > 0, {
+  message: 'Isi jumlah soal minimal satu jenis di tiap topik.',
+});
 
 async function generateQuestions(req, res) {
   const p = z.object({
     class_id: z.number().int(),
     exam_type: z.string().trim().min(1).max(60),
     subject_name: z.string().trim().min(1).max(120),
-    topics: z.array(z.object({ name: z.string().trim().min(1).max(120), count: z.number().int().min(1).max(20) })).min(1).max(10),
+    topics: z.array(JumlahTopik).min(1).max(10),
     paper_size: z.enum(['A4', 'F4']).optional(),
   }).parse(req.body);
   const inst = needTenant(req, res, req.body.institution_id);
@@ -158,12 +166,18 @@ async function generateQuestions(req, res) {
   if (!kelas) return fail(res, 400, 'VALIDATION_ERROR', 'Kelas tak ditemukan di sekolah ini.');
   if (!kelas.level) return fail(res, 400, 'VALIDATION_ERROR', 'Kelas ini belum punya tingkat. Atur dulu di halaman Profil.');
 
-  // Topik dengan nama sama digabung, jumlahnya dijumlahkan.
+  // Topik dengan nama sama digabung, jumlah tiap jenisnya dijumlahkan.
   const gabung = new Map();
   for (const t of p.topics) {
     const nama = rapiNama(t.name);
     const kunci = nama.toLowerCase();
-    gabung.set(kunci, { name: nama, count: (gabung.get(kunci)?.count || 0) + t.count });
+    const lama = gabung.get(kunci);
+    gabung.set(kunci, {
+      name: nama,
+      pg: (lama?.pg || 0) + t.pg,
+      isian: (lama?.isian || 0) + t.isian,
+      uraian: (lama?.uraian || 0) + t.uraian,
+    });
   }
   const daftarTopik = [...gabung.values()];
   const namaMapel = rapiNama(p.subject_name);
@@ -187,10 +201,12 @@ async function generateQuestions(req, res) {
       const topik = await cariBuatTopik(mapel.id, req.user.id, t.name);
       const materi = await materiTopik(topik.id);
       const raw = await generateText(buildGeneratePrompt({
-        mapel: namaMapel, topik: topik.name, tingkat: kelas.level, materi, count: t.count,
-        qtypes: ['PG', 'ISIAN', 'URAIAN'],
+        mapel: namaMapel, topik: topik.name, tingkat: kelas.level, materi,
+        rencana: { PG: t.pg, ISIAN: t.isian, URAIAN: t.uraian },
       }), {});
-      const soal = saringSoal(rapikanHasil(parseJson(raw)));
+      const soal = potongSesuaiRencana(saringSoal(rapikanHasil(parseJson(raw))), {
+        PG: t.pg, ISIAN: t.isian, URAIAN: t.uraian,
+      });
       if (!soal.length) throw new Error('AI tidak mengembalikan soal yang sesuai format. Coba lagi.');
       for (const g of soal) {
         const q = (await pool.query(

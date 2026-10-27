@@ -11,18 +11,24 @@ const LABEL = {
   chapter_id: 'Bab', sub_chapter_id: 'Subbab', grade_level: 'Tingkat kelas',
   paper_size: 'Ukuran kertas', mode: 'Mode', institution_id: 'Institusi',
   header_markdown: 'Kop surat', count: 'Jumlah', qtypes: 'Tipe soal',
-  exam_type: 'Jenis ujian',
+  exam_type: 'Jenis ujian', topics: 'Daftar topik',
+  pg: 'Jumlah pilihan ganda', isian: 'Jumlah isian', uraian: 'Jumlah uraian',
   rows: 'Baris', file: 'Berkas', foto: 'Foto',
 };
 
 function ramah(issue) {
-  const field = (issue.path || [])[0];
+  // Isian di dalam larik (mis. topics[0].pg) lebih berguna disebut field
+  // terdalamnya daripada nama lariknya.
+  const path = issue.path || [];
+  const dalam = [...path].reverse().find((x) => typeof x === 'string');
+  const field = dalam || path[0];
   const label = LABEL[field] || (field ? String(field) : 'Isian');
   if (issue.code === 'too_small') return `${label} wajib diisi.`;
   if (issue.code === 'too_big') return `${label} kebanyakan/kepanjangan.`;
   if (issue.validation === 'email') return 'Email tak valid, contoh: nama@sekolah.id.';
   if (issue.code === 'invalid_type') return `${label} belum benar.`;
   if (issue.code === 'invalid_enum_value') return `${label} pilihannya tidak dikenal.`;
+  if (issue.code === 'custom' && issue.message) return issue.message;
   return `${label} belum benar.`;
 }
 

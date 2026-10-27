@@ -18,13 +18,20 @@ const GeneratedQ = z.object({
 
 // Materi hanya konteks tambahan. Tanpa materi, soal disusun dari mapel, topik,
 // dan tingkat supaya guru tetap bisa membuat soal tanpa mengunggah berkas.
-function buildGeneratePrompt({ mapel, topik, tingkat, materi, count, qtypes }) {
+const LABEL_JENIS = { PG: 'pilihan ganda', ISIAN: 'isian singkat', URAIAN: 'uraian' };
+
+// rencana berisi jumlah per jenis, mis. { PG: 5, ISIAN: 2, URAIAN: 0 }.
+function buildGeneratePrompt({ mapel, topik, tingkat, materi, rencana }) {
+  const bagian = Object.entries(rencana)
+    .filter(([, n]) => n > 0)
+    .map(([jenis, n]) => `${n} soal ${LABEL_JENIS[jenis]}`);
+  const total = bagian.length ? Object.values(rencana).reduce((a, b) => a + b, 0) : 0;
   const sumber = materi && materi.trim()
     ? `Gunakan materi berikut sebagai acuan utama:\n---\n${materi.slice(0, 12000)}\n---`
     : 'Tidak ada berkas materi. Susun soal dari topik di atas sesuai kurikulum Merdeka untuk tingkat tersebut.';
   return [
     { role: 'system', content: 'Kamu pembuat soal kurikulum Merdeka untuk guru Indonesia. Jawab HANYA JSON valid sesuai schema, tanpa teks lain. Bahasa Indonesia. Jangan mengarang fakta di luar materi.' },
-    { role: 'user', content: `Buat tepat ${count} soal (${qtypes.join(', ')}) untuk:\nMata pelajaran: ${mapel}\nTingkat: kelas ${tingkat}\nTopik: ${topik}\n\n${sumber}\n\nFormat: {"questions":[{"qtype":"PG|ISIAN|URAIAN","text":"...","options":["...","..."],"answer_key":"B","weight":1,"rubric":"..."}]}. Untuk PG tulis 4 pilihan tanpa huruf di depan (bukan "A. ..."), answer_key satu huruf besar. Semua tipe wajib punya answer_key terisi; untuk URAIAN isi jawaban intinya, bukan rubrik penilaian.` },
+    { role: 'user', content: `Buat tepat ${total} soal dengan rincian: ${bagian.join(', ')}. Jangan menambah jenis soal lain. Untuk:\nMata pelajaran: ${mapel}\nTingkat: kelas ${tingkat}\nTopik: ${topik}\n\n${sumber}\n\nFormat: {"questions":[{"qtype":"PG|ISIAN|URAIAN","text":"...","options":["...","..."],"answer_key":"B","weight":1,"rubric":"..."}]}. Untuk PG tulis 4 pilihan tanpa huruf di depan (bukan "A. ..."), answer_key satu huruf besar. Semua tipe wajib punya answer_key terisi; untuk URAIAN isi jawaban intinya, bukan rubrik penilaian.` },
   ];
 }
 
@@ -64,6 +71,17 @@ function saringSoal(bersih) {
   });
 }
 
+// Model kadang menambah jenis yang tidak diminta atau melebihi jumlah. Ambil
+// hanya yang diminta, berurutan, supaya isi ujian sesuai pilihan guru.
+function potongSesuaiRencana(daftar, rencana) {
+  const sisa = { ...rencana };
+  return daftar.filter((q) => {
+    if (!sisa[q.qtype]) return false;
+    sisa[q.qtype] -= 1;
+    return true;
+  });
+}
+
 function parseJson(text) {
   const m = String(text).match(/\{[\s\S]*\}/);
   if (!m) throw new Error('LLM tidak mengembalikan JSON');
@@ -80,4 +98,4 @@ function buildGradePrompt(kunci) {
   return `Lihat foto lembar jawaban. Kunci: ${kunci}. Huruf opsi tercetak kecil (a-d), jadi bandingkan tanpa peduli huruf besar/kecil. Untuk PG baca huruf jawaban tiap nomor, bandingkan dengan kunci. Uraian hanya saran skor 0-maks + alasan. Bila tulisan tak terbaca, readable:false dan jangan menebak. Jawab HANYA JSON: {"pg":[{"nomor":1,"terbaca":"B","benar":true}],"uraian":[{"nomor":11,"saran":7,"maks":10,"alasan":"...","readable":true}],"feedback":"..."}`;
 }
 
-module.exports = { buildGeneratePrompt, rapikanHasil, saringSoal, parseJson, GradeOut, buildGradePrompt };
+module.exports = { buildGeneratePrompt, rapikanHasil, saringSoal, potongSesuaiRencana, parseJson, GradeOut, buildGradePrompt };

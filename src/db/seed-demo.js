@@ -264,7 +264,7 @@ async function cariBuat(cariSql, cariP, buatSql, buatP, label) {
       fs.mkdirSync(DIR_SUMBER, { recursive: true });
       const berkas = path.join(DIR_SUMBER, `demo-${p.mapel}-t${p.tingkat}-${p.subbab}.txt`.toLowerCase().replace(/\s+/g, '-'));
       fs.writeFileSync(berkas, p.materi);
-      sumber = await satu("INSERT INTO sources(institution_id,sub_chapter_id,kind,file_path,extracted_path,status,created_by) VALUES($1,$2,'upload',$3,$3,'done',$4) RETURNING *", [inst.id, sub.id, berkas, buat]);
+      sumber = await satu("INSERT INTO sources(institution_id,topic_id,sub_chapter_id,kind,file_path,extracted_path,status,created_by) VALUES($1,$2,$3,'upload',$4,$4,'done',$5) RETURNING *", [inst.id, topik.id, sub.id, berkas, buat]);
       baris.push(`materi ${p.mapel} t${p.tingkat} > ${p.subbab}: 1 berkas`);
     }
 
